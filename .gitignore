@@ -1,0 +1,8 @@
+.ipynb_checkpoints/
+
+*.csv
+*.zarr
+*.nc
+*.tif
+*.npz
+*.geojson
