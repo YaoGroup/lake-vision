@@ -70,5 +70,50 @@ def bounds_latlon_around(center_lon, center_lat, side_m=10000):
     sq_ll = transform(to_ll, sq_m)
     return sq_ll.bounds  # (minx, miny, maxx, maxy)
 
+## FUNCTION TO FILTER LIST OF ITEMS TO SELECT THE BEST ITEM PER DATE BASED ON MAXIMUM COVERAGE 
+def best_items_per_date(items, bbox):
+    """
+    From a flat list of pystac.Item, return one Item per sensing-date—
+    namely, the tile whose bbox overlaps the given AOI bbox the most.
+    
+    Parameters
+    ----------
+    items : Sequence[pystac.Item]
+        your full STAC Item list
+    bbox : tuple(float, float, float, float)
+        (minx, miny, maxx, maxy) in lon/lat
+    
+    Returns
+    -------
+    List[pystac.Item]
+        one “best‐overlap” Item per unique sensing date
+    """
+    aoi = box(*bbox)
+    
+    # 1) bucket items by date
+    items_by_date = defaultdict(list)
+    for item in items:
+        dt = item.datetime.date()
+        items_by_date[dt].append(item)
+    
+    # 2) pick best per date
+    best = []
+    for dt, group in items_by_date.items():
+        # compute overlap for each tile of that date
+        overlaps = {
+            item: aoi.intersection(box(*item.bbox)).area
+            for item in group
+        }
+        # choose the one with max intersection area
+        best_item = max(overlaps, key=overlaps.get)
+        best.append(best_item)
+        
+    best_collection = ItemCollection(best)
+    
+    return best_collection
 
 
+
+if __name__=="__main__":
+    
+    
