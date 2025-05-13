@@ -6,3 +6,7 @@
 *.tif
 *.npz
 *.geojson
+
+*.venv/
+venv/
+env/
