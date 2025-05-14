@@ -9,10 +9,7 @@ Installation guide...
 
 ## Training
 
-<video width="640" controls>
-  <source src="assets/training_visualization.mp4" type="video/mp4">
-  Your browser doesn’t support HTML5 video.
-</video>
+![Training Visualization](assets/training_visualization.gif)
 
 ## Usage
 Usage guide for the different functionalities...
