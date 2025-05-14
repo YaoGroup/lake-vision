@@ -9,7 +9,7 @@ Installation guide...
 
 ## Training
 
-![Training Visualization](assets/training_visualization.gif)
+<img src="assets/training_visualization.gif" alt="Training Visualization" width="480px" />
 
 ## Usage
 Usage guide for the different functionalities...
