@@ -1,6 +1,8 @@
 # lake-vision
 Framework for tracking supraglacial lake evolution.  Developed for Greenland.  Applicable globally.
 
+Note: This repo is under active development
+
 ## Introduction
 Introduction...
 
