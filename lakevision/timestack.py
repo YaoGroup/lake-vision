@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import os
 import dask
 import dask.array
+import math
 
 import datetime
 
@@ -46,9 +47,41 @@ def bounds_latlon_around(center_lon, center_lat, side_m=10000):
     side_m                 : length of box side in meters (default 10 km)
     returns                 : (minx, miny, maxx, maxy) in lon/lat
     """
+    
+    # FIND BEST CRS FOR CENTROID
+    def best_crs_for_point(lon, lat):
+        """
+        Choose a projected CRS (EPSG) that minimizes distortion
+        for a small box around (lon, lat).
+
+        - |lat| ≥ 60° → Polar Stereographic (EPSG:3413 North / 3031 South)
+        - else         → UTM zone based on lon
+
+        Returns a pyproj.CRS object.
+        """
+        if lat >= 60:
+            # Arctic Polar Stereographic
+            return pyproj.CRS.from_epsg(3413)
+        elif lat <= -60:
+            # Antarctic Polar Stereographic
+            return pyproj.CRS.from_epsg(3031)
+        else:
+            # UTM
+            zone_number = int(math.floor((lon + 180) / 6) + 1)
+            is_south   = lat < 0
+            # Construct a PROJ string for UTM:
+            proj4 = (
+                f"+proj=utm +zone={zone_number} "
+                f"+{'south' if is_south else 'north'} +datum=WGS84 +units=m +no_defs"
+            )
+            return pyproj.CRS.from_proj4(proj4)
+    
     # SET UP TRANSFORMERS
-    to_ps = pyproj.Transformer.from_crs(4326, 3413, always_xy=True).transform
-    to_ll = pyproj.Transformer.from_crs(3413, 4326, always_xy=True).transform
+    centroid = (center_lon, center_lat)
+    epsg_code = int(best_crs_for_point(*centroid).to_authority()[1])
+    print(f"epsg for bounds_latlon: {epsg_code}")
+    to_ps = pyproj.Transformer.from_crs(4326, epsg_code, always_xy=True).transform
+    to_ll = pyproj.Transformer.from_crs(epsg_code, 4326, always_xy=True).transform
 
     # PROJECT CENTROID TO METERS
     x0, y0 = to_ps(center_lon, center_lat)
@@ -62,13 +95,13 @@ def bounds_latlon_around(center_lon, center_lat, side_m=10000):
     return sq_ll.bounds
 
 ## FUNCTION FOR GENERATE A STACK FOR A GIVEN LOCATION ACROSS A DATE RANGE, EACH DAY
-def timestack_gen(catalog, centroid, band_names, bbox_size=6000, tile_size=512, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=False):
+def timestack_gen(catalog, centroid, band_names, pix_res=10, tile_size=1024, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=False):
     """
     Generate a daily, multi-band image time‐stack centered on a point.
 
     This function:
       1. Searches a STAC catalog (Sentinel-2 L2A) for all scenes covering
-         a square of size `bbox_size` (in meters) around `centroid`
+         a square of size (in meters) around `centroid`
          between the dates in `time_range`.
       2. Builds a 4D xarray.DataArray (time, band, y, x) using stackstac.
       3. Resamples to a daily cadence, carrying forward the maximum
@@ -84,8 +117,6 @@ def timestack_gen(catalog, centroid, band_names, bbox_size=6000, tile_size=512, 
         (longitude, latitude) in decimal degrees of the point of interest.
     band_names : list of str
         Sentinel-2 band names (e.g. ['B04','B03','B02','B08','B11']).
-    bbox_size : int, optional
-        Width/height of the search bounding box in meters (default: 6000).
     tile_size : int, optional
         Size of the output tile in pixels (square) (default: 512).
     time_range : str, optional
@@ -107,15 +138,17 @@ def timestack_gen(catalog, centroid, band_names, bbox_size=6000, tile_size=512, 
           - time: daily steps over `time_range`
           - band: the requested `band_names`
           - y, x: UTM coordinates of the tile
+          - eo_cloud_cover: cloud cover percentage
+          - pct_nans: percent of tile that is nans
 
     Notes
     -----
     - Requires `stackstac`, `xarray`, `dask`, and a STAC `catalog` in scope.
-    - Assumes `catalog` has been defined globally or imported.
     - CRS for reprojection is taken from the first item in the search.
     """
     
     # SEARCH IMAGERY CATALOG FOR ITEMS MATCHING LOCATION AND DATE RANGE
+    bounds_latlon = bounds_latlon_around(*centroid, side_m=pix_res*tile_size*1.1)
     search = catalog.search(
         collections=["sentinel-2-l2a"],
         bbox=bounds_latlon,
@@ -172,10 +205,16 @@ def timestack_gen(catalog, centroid, band_names, bbox_size=6000, tile_size=512, 
     x_utm, y_utm = pyproj.Proj(stack.crs)(*centroid)
     timestack = stack_daily.loc[..., y_utm+buffer:y_utm-buffer, x_utm-buffer:x_utm+buffer]
     
+    # TRACK PERCENT OF PIXELS THAT ARE NAN AND STORE AS NEW COORDINATE IN DATAARRAY
+    nan_counts = timestack.isnull().sum(dim=('band', 'y', 'x'))
+    total = len(band_names) * tile_size * tile_size
+    pct_nans = (nan_counts / total) * 100
+    timestack = timestack.assign_coords(pct_nans=('time', pct_nans.values))
+    
     # PULL STACK INTO MEMORY
     if pull_to_mem:
         stack_to_pull = timestack
-        print(f"pulling stack into memory, shape will be: {tile_stack.shape}")
+        print(f"pulling stack into memory, shape will be: {timestack.shape}")
         with dask.diagnostics.ProgressBar():
             timestack_mem = stack_to_pull.compute()
         print(f"shape of stack in memory: {timestack_mem.shape}")
@@ -183,6 +222,7 @@ def timestack_gen(catalog, centroid, band_names, bbox_size=6000, tile_size=512, 
     else:
         print(f"timestack (not in mem) shape: {timestack.shape}\n")
         return timestack
+    
     
 
 ## ========= ##
@@ -195,37 +235,25 @@ if __name__=="__main__":
         "https://planetarycomputer.microsoft.com/api/stac/v1",
         modifier=planetary_computer.sign_inplace,)
     print(f"connected to Microsoft Planetary Computer")
-    
-    ## LOOP OVER LOCATIONS (LAKENUMS) AND STORE EACH AS A SEPARATE .zarr
-    # READ IN THE LAKE INFORMATION .geojson FILE
-    gdf = gpd.read_file("/home/jupyter/repos/lake-vision/sandbox/dunmire_cw2019_shuttle.geojson")
-    # gdf = gdf.to_crs(tiles_full.rio.crs)  # make sure it’s in the same CRS as the imagery in the stack
 
-    # NORMALIZE OR NOT
+    # DECIDE WHETHER TO NORMALIZE THE IMAGERY UPON COMPLIING OR NOT
     normalize = False
 
-    # LOOP OVER LAKE LOCATIONS
-    # for idx_lake in range(len(gdf)):
-    for idx_lake in range(1):
+    # BOUNDING BOX AROUND LAKE CENTROID
+    centroid = (-122.45, 37.83)
+    # centroid = (-122.45957, 37.80539) # CHRISSY FIELD MARSH
+    # centroid = (-49.495, 68.725) # NORTH LAKE
 
-        print(f"searching for imagery for lakenum {gdf.lakenum.iloc[idx_lake]}")
+    # SPECIFY TIME RANGE
+    time_range = '2019-05-01/2019-09-30'
 
-        # BOUNDING BOX AROUND LAKE CENTROID
-        centroid = (gdf.iloc[idx_lake].centroid_x, gdf.iloc[idx_lake].centroid_y)
-        bounds_latlon = bounds_latlon_around(*centroid, side_m=6000)
+    # SPECIFY IMAGERY BANDS
+    band_names = ["B04",  # red (665 nm)
+                  "B03",  # green (560 nm)
+                  "B02",  # blue (490 nm)
+                  "B08",  # NIR (842 nm)
+                  "B11"]  # SWIR1 (1610 nm)
 
-        # SPECIFY TIME RANGE
-        time_range = '2019-05-01/2019-09-30'
-
-        # SPECIFY IMAGERY BANDS
-        band_names = ["B04",  # red (665 nm)
-                      "B03",  # green (560 nm)
-                      "B02",  # blue (490 nm)
-                      "B08",  # NIR (842 nm)
-                      "B11"]  # SWIR1 (1610 nm)
-
-        # CALL FUNCTION TO GENERATE TIMESTACK
-        timestack = timestack_gen(catalog, centroid, band_names, bbox_size=6000, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=True)
-
-        # SAVE STACK TO DISK OR MAYBE NEED TO STACK THESE ALL TOGETHER ACROSS LAKES INTO ONE FILE???
+    # CALL FUNCTION TO GENERATE TIMESTACK
+    timestack = timestack_gen(catalog, centroid, band_names, pix_res=10, tile_size=1024, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=True)
     
