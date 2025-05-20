@@ -103,6 +103,7 @@ grpcio-status==1.49.0rc1
 gymnasium==1.0.0
 h11==0.14.0
 h2 @ file:///home/conda/feedstock_root/build_artifacts/h2_1738578511449/work
+h5py==3.13.0
 hpack @ file:///home/conda/feedstock_root/build_artifacts/hpack_1737618293087/work
 htmlmin==0.1.12
 httplib2==0.22.0
@@ -326,6 +327,7 @@ websockets==15.0.1
 widgetsnbextension==4.0.13
 wordcloud==1.9.4
 wrapt==1.17.2
+xarray==2025.4.0
 y-py==0.6.2
 yarl==1.18.3
 ydata-profiling==4.16.1
