@@ -28,6 +28,7 @@ MarkupSafe==3.0.2
 matplotlib==3.10.3
 msgpack==1.1.0
 narwhals==1.39.0
+netCDF4>=1.6.2
 numcodecs==0.16.0
 numpy==2.2.5
 packaging==25.0

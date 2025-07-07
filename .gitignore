@@ -6,3 +6,6 @@
 *.tif
 *.npz
 *.geojson
+
+*.err
+*.out

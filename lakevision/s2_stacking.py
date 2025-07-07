@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import os
 import dask
 import dask.array
+from dask.distributed import Client, LocalCluster
 import math
 
 from tqdm.auto import tqdm
