@@ -9,3 +9,8 @@
 
 *.err
 *.out
+*.pth
+*.json
+*.venv/
+venv/
+env/
