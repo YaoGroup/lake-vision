@@ -5,6 +5,7 @@
 *.nc
 *.tif
 *.npz
+*.npy
 *.geojson
 
 *.err
