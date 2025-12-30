@@ -218,4 +218,81 @@ class ClassHeadMLP(nn.Module):
         """
         return self.fc(x)
     
+class ScalarSeqsLSTM(nn.Module):
+    """
+    LSTM block for processing scalar time series sequences.
 
+    Processes 1D sequences of scalar values (e.g., water area, cloudy tile fraction)
+    using standar LSTM architecture. Unlike CLSTM, which preserves spatial structure,
+    this processes temporal sequences of scalar features only.
+
+    Args:
+        hidden_dim (int): hidden state dimension of LSTM (default: 16)
+        num_layers (int): number of stacked LSTM layers (default: 1)
+        dropout (float) dropout probability between the LSTM layers (default: 0.0)
+            NOTE: only applied if num_layers > 1
+
+    Input:
+        x: [B, T, 1] tensor of scalar time series sequences
+            B: batch size
+            T: time steps
+            1: single scalar feature per timestep (e.g., lake water area)
+
+    Output:
+        [B, T, hidden_dim] tensor of hidden states at all timesteps
+            B: batch size
+            T: time steps
+            hidden_dim: LSTM hidden state dimension
+    
+    Example 1:
+        (water area sequence)
+        >>> area_lstm = ScalarSeqsLSTM(hidden_dim=16)
+        >>> area_seq = torch.randn(16, 153, 1) # [B=16, T=153, 1]
+        >>> out = area_lstm(area_seq) # [B=16, T=153, hidden_dim=16]
+    """
+    def __init__(self, hidden_dim=16, num_layers=1, dropout=0.0):
+        super(ScalarSeqsLSTM, self).__init__()
+
+        self.lstm = nn.LSTM(
+            input_size=1,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+        )
+
+    def forward(self, x):
+        """
+        Process scalar sequence through LSTM.
+
+        Args:
+            x: [B, T, 1] tensor of scalar sequence
+        
+        Returns:
+            [B, T, hidden_dim] tensor of hidden states at all timesteps
+        """
+        # verify input shape
+        if x.shape[-1] != 1:
+            raise ValueError(f"Expected input with last dimension = 1 (single scalar feature), "
+                             f"but got shape {x.shape}. Reminder, use separate ScalarSeqsLSTM "
+                             f"instances for each scalar feature."
+                             )
+        
+        # initialize hidden and cell states
+        h0 = torch.zeros(
+            self.lstm.num_layers,
+            x.size(0),
+            self.lstm.hidden_size,
+            device=x.device
+        )
+        c0 = torch.zeros(
+            self.lstm.num_layers,
+            x.size(0),
+            self.lstm.hidden_size,
+            device=x.device
+        )
+        
+        # forward pass through LSTM
+        output, (h_n, c_n) = self.lstm(x, (h0, c0))
+
+        return output # [B, T, hidden_dim]
