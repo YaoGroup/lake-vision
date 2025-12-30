@@ -296,3 +296,109 @@ class ScalarLSTM(nn.Module):
         output, (h_n, c_n) = self.lstm(x, (h0, c0))
 
         return output # [B, T, hidden_dim]
+
+
+class GlobalPooling(nn.Module):
+    """
+    Global pooling to reduce spatial dimensions to feature vectors.
+    
+    Reduces 2D spatial dimensions (H × W) to a single value per channel
+    using either average pooling, max pooling, or both. Commonly used
+    before classification layers to convert spatial feature maps to vectors.
+    
+    Args:
+        pool_type (str): Type of pooling to apply. Options:
+            - 'avg': Average pooling (mean across spatial dimensions)
+            - 'max': Max pooling (maximum across spatial dimensions)
+            - 'both': Concatenates avg and max (doubles output channels)
+            (default: 'avg')
+    
+    Input:
+        x: [B, C, H, W] or [B, T, C, H, W] tensor
+            B: batch size
+            T: time steps (optional)
+            C: channels
+            H: height
+            W: width
+    
+    Output:
+        [B, C] or [B, T, C] if pool_type='avg' or 'max'
+        [B, 2*C] or [B, T, 2*C] if pool_type='both'
+    
+    Example 1: Average pooling (default)
+        >>> pool = GlobalPooling(pool_type='avg')
+        >>> x = torch.randn(2, 32, 64, 64)  # [B, C, H, W]
+        >>> out = pool(x)  # [2, 32]
+    
+    Example 2: Max pooling
+        >>> pool = GlobalPooling(pool_type='max')
+        >>> x = torch.randn(2, 32, 64, 64)
+        >>> out = pool(x)  # [2, 32]
+    
+    Example 3: Both (concatenated avg and max)
+        >>> pool = GlobalPooling(pool_type='both')
+        >>> x = torch.randn(2, 32, 64, 64)
+        >>> out = pool(x)  # [2, 64] - channels doubled!
+    
+    Example 4: With time dimension
+        >>> pool = GlobalPooling(pool_type='avg')
+        >>> x = torch.randn(2, 10, 32, 64, 64)  # [B, T, C, H, W]
+        >>> out = pool(x)  # [2, 10, 32]
+    
+    Note:
+        When pool_type='both', output channels are doubled because
+        average and max pooled features are concatenated.
+    """
+    def __init__(self, pool_type='avg'):
+        super(GlobalPooling, self).__init__()
+        
+        valid_types = ['avg', 'max', 'both']
+        if pool_type not in valid_types:
+            raise ValueError(
+                f"pool_type must be one of {valid_types}, got '{pool_type}'"
+            )
+        
+        self.pool_type = pool_type
+    
+    def forward(self, x):
+        """
+        Apply global pooling to reduce spatial dimensions.
+        
+        Args:
+            x: [B, C, H, W] or [B, T, C, H, W] tensor
+        
+        Returns:
+            [B, C] or [B, T, C] tensor (or [B, 2*C] / [B, T, 2*C] if pool_type='both')
+        """
+        # Check if time dimension is present
+        has_time = (x.ndim == 5)
+        
+        if has_time:
+            # Merge batch and time for processing
+            B, T, C, H, W = x.shape
+            x = x.reshape(B * T, C, H, W)
+        
+        # Apply pooling
+        if self.pool_type == 'avg':
+            # Average pooling: mean of all spatial locations
+            pooled = F.adaptive_avg_pool2d(x, (1, 1))  # [B*T, C, 1, 1]
+        
+        elif self.pool_type == 'max':
+            # Max pooling: maximum of all spatial locations
+            pooled = F.adaptive_max_pool2d(x, (1, 1))  # [B*T, C, 1, 1]
+        
+        elif self.pool_type == 'both':
+            # Both: concatenate avg and max features
+            avg_pool = F.adaptive_avg_pool2d(x, (1, 1))  # [B*T, C, 1, 1]
+            max_pool = F.adaptive_max_pool2d(x, (1, 1))  # [B*T, C, 1, 1]
+            pooled = torch.cat([avg_pool, max_pool], dim=1)  # [B*T, 2*C, 1, 1]
+        
+        # Remove spatial dimensions (1x1)
+        pooled = pooled.squeeze(-1).squeeze(-1)  # [B*T, C] or [B*T, 2*C]
+        
+        # Restore time dimension if needed
+        if has_time:
+            C_out = pooled.shape[1]
+            pooled = pooled.reshape(B, T, C_out)  # [B, T, C] or [B, T, 2*C]
+        
+        return pooled
