@@ -101,3 +101,4 @@ class FrontCNN(nn.Module):
         x = x.view(B, T, C_out, H_out, W_out)
 
         return x
+    
