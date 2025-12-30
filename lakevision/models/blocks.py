@@ -218,7 +218,7 @@ class ClassHeadMLP(nn.Module):
         """
         return self.fc(x)
     
-class ScalarSeqsLSTM(nn.Module):
+class ScalarLSTM(nn.Module):
     """
     LSTM block for processing scalar time series sequences.
 
@@ -251,7 +251,7 @@ class ScalarSeqsLSTM(nn.Module):
         >>> out = area_lstm(area_seq) # [B=16, T=153, hidden_dim=16]
     """
     def __init__(self, hidden_dim=16, num_layers=1, dropout=0.0):
-        super(ScalarSeqsLSTM, self).__init__()
+        super(ScalarLSTM, self).__init__()
 
         self.lstm = nn.LSTM(
             input_size=1,
