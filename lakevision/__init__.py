@@ -1,14 +1,14 @@
 # lakevision/models/__init__.py
 
 from .blocks import (
-    FrontendCNN,
-    ScalarSeqsLSTM,
-    ClassificationHead,
+    FrontCNN,
+    ScalarLSTM,
+    ClassHeadMLP,
     GlobalPooling,
 )
 from .convlstm import (
-    ConvLSTMCell,
-    ConvLSTM,
+    CellCLSTM,
+    CLSTM,
 )
 from .attention import (
     SpatialCBAM,
@@ -21,13 +21,13 @@ from .classifier import (
 
 __all__ = [
     # Basic blocks
-    'FrontendCNN',
-    'ScalarSeqsLSTM',
-    'ClassificationHead',
+    'FrontCNN',
+    'ScalarLSTM',
+    'ClassHeadMLP',
     'GlobalPooling',
     # ConvLSTM
-    'ConvLSTMCell',
-    'ConvLSTM',
+    'CellCLSTM',
+    'CLSTM',
     # Attention
     'SpatialCBAM',
     'FullCBAM',
