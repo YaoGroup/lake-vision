@@ -102,3 +102,120 @@ class FrontCNN(nn.Module):
 
         return x
     
+class ClassMLP(nn.Module):
+    """
+    Multi-layer perceptron (MLP) head block for classification.
+
+    Takes concatenated feature vectors from multiple sources (e.g., CLSTM output, or scalar LSTM output)
+    and outputs final class logits.  Includes optional dropout for regularization.
+
+    Args:
+        input_dim (int): Input feature dimension (e.g., concatenated features from image and scalar sequences)
+        hidden_dims (int, list of int, or None): Hidden layer dimension(s).
+            - int: single hidden layer dimension(s)
+            - list of int: multiple hidden layers with specified dimension
+            - None: no hidden layer (direct linear projection)
+            Examples: 64, [64, 32], [128, 64, 32], None
+            (default: 64)
+        num_classes (int): Number of output classes (default: 4 for ND/ED/LD/CD)
+        dropout (float): Dropout probability. Set to 0.0 to disble. (default: 0.0)
+        activation (str): Activation function to use. Options: 'relu', 'leakyrelu', 'gelu'. (default: 'relu')
+
+        Input:
+            x: [B, input_dim] tensor of concatenated features after (C)LSTM processing
+                B: batch size
+                input_dim: total feature dimension (e.g., clstm_hidden + slstm_hidden)
+            
+        Output:
+            [B, num_classes] tensor of unnormalized (raw) class logits
+            Apply softmax externally for probabilities: torch.softmax(logits, dim=1)
+            Apply argmax for predictions: torch.argmax(logits, dim=1)
+
+        Example 1:
+            (single hidden layer)
+            >>> head = ClassMLP(input_dim=80, hidden_dims=64, num_classes=4)
+            >>> features = torch.randn(16, 80) # [batch=16, features=80]
+            >>> logits = head(features) # [batch=16, num_classes=4]
+            >>> probs = torch.softmax(logits, dim=1) # class probabilities
+            >>> preds = torch.argmax(logits, dim=1) # class predictions
+
+        Example 2:
+            (multiple hidden layers)
+            >>> head = ClassMLP(input_dim=80, hidden_dims=[64, 32])
+            >>> # architecture: 80 -> 64 -> 32 -> 4
+            >>> logits = head(features) # [batch=16, num_classes=4]
+            
+        Example 3:
+            (with dropout)
+            >>> head = ClassMLP(input_dim=80, hidden_dims=64, num_classes=4, dropout=0.5)
+            >>> logits = head(features) # dropout applied during training
+
+        Example 4:
+            (single layer, no hidden layer)
+            >>> head = ClassMLP(input_dim=80, hidden_dims=None, num_classes=4)
+            >>> logits = head(features) # direct linear projection
+    """
+    def __init__(self,
+                 input_dim,
+                 hidden_dims=64,
+                 num_classes=4,
+                 dropout=0.0,
+                 activation='relu'
+                 ):
+        super(ClassMLP, self).__init__()
+
+        # normalize hidden_dims to a list
+        if hidden_dims is None:
+            hidden_dims = []
+        elif isinstance(hidden_dims, int):
+            hidden_dims = [hidden_dims]
+        elif not isinstance(hidden_dims, list):
+            raise ValueError(f"hidden_dims must be an int, list of ints, or None, but got {type(hidden_dims)}")
+
+        # select activation function
+        activations = {
+            'relu': nn.ReLU(inplace=True),
+            'leakyrelu': nn.LeakyReLU(inplace=True),
+            'gelu': nn.GELU()
+        }
+
+        if activation.lower() not in activations:
+            raise ValueError(f"activation must be one of: {list(activations.keys())}, but got '{activation}'")
+
+        act_fn = activations[activation.lower()]
+
+        # build MLP layers
+        layers = []
+        prev_dim = input_dim
+
+        for hidden_dim in hidden_dims:
+            layers.append(nn.Linear(prev_dim, hidden_dim))
+            layers.append(act_fn)
+            if dropout > 0.0:
+                layers.append(nn.Dropout(dropout))
+            prev_dim = hidden_dim
+        
+        # add output layer (no activation or dropout after final layer)
+        layers.append(nn.Linear(prev_dim, num_classes))
+        self.fc = nn.Sequential(*layers)
+
+        # store config for inspection
+        # self.input_dim = input_dim
+        # self.hidden_dims = hidden_dims
+        # self.num_classes = num_classes
+        # self.dropout = dropout
+        # self.activation = activation
+
+    def forward(self, x):
+        """
+        Forward pass through classification head.
+
+        Args:
+            x: [B, input_dim] tensor of input features
+
+        Returns:
+            [B, num_classes] tensor of class logits (unnormalized scores)
+        """
+        return self.fc(x)
+    
+
