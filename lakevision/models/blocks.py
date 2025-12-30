@@ -102,7 +102,7 @@ class FrontCNN(nn.Module):
 
         return x
     
-class ClassMLP(nn.Module):
+class ClassHeadMLP(nn.Module):
     """
     Multi-layer perceptron (MLP) head block for classification.
 
@@ -162,7 +162,7 @@ class ClassMLP(nn.Module):
                  dropout=0.0,
                  activation='relu'
                  ):
-        super(ClassMLP, self).__init__()
+        super(ClassHeadMLP, self).__init__()
 
         # normalize hidden_dims to a list
         if hidden_dims is None:
