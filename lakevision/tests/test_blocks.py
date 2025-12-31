@@ -22,11 +22,11 @@ class TestFrontCNN:
     def test_basic_forward(self):
         """Test basic forward pass of FrontCNN."""
         model = FrontCNN(in_channels=3, base_channels=8, num_layers=3)
-        x = torch.randn(2, 153, 3, 512, 512)  # [B=2, T=153, C=4, H=512, W=512]
+        x = torch.randn(2, 13, 3, 512, 512)  # [B=2, T=13, C=4, H=512, W=512]
         out = model(x)
 
-        # with 3 layers and default out_hw=(32,32) we expect output shape to be [B=2, T=153, C=32, H=32, W=32]
-        assert out.shape == (2, 153, 32, 32, 32), f"Expected output shape (2, 153, 32, 32, 32), but got {out.shape}"
+        # with 3 layers and default out_hw=(32,32) we expect output shape to be [B=2, T=13, C=32, H=32, W=32]
+        assert out.shape == (2, 13, 32, 32, 32), f"Expected output shape (2, 13, 32, 32, 32), but got {out.shape}"
 
         # check for nans or infs
         assert not torch.isnan(out).any(), "Output contains NaNs"
@@ -49,7 +49,7 @@ class TestFrontCNN:
             out_hw=(32,32),
             pool='avg',
         )
-        x = torch.randn(2, 153, 3, 512, 512)
+        x = torch.randn(2, 13, 3, 512, 512)
         out = model(x)
         assert out.shape[-2:] == (32, 32), f"Expected output spatial size (32,32), but got {out.shape[-2:]}"
 
@@ -64,7 +64,7 @@ class TestFrontCNN:
             out_hw=(64,64),
             pool='max',
         )
-        x = torch.randn(2, 153, 3, 512, 512)
+        x = torch.randn(2, 13, 3, 512, 512)
         out = model(x)
         assert out.shape[-2:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2:]}"
 
@@ -77,7 +77,7 @@ class TestFrontCNN:
             out_hw=(1,1),
             pool='avg',
         )
-        x = torch.randn(2, 153, 3, 512, 512)
+        x = torch.randn(2, 13, 3, 512, 512)
         out = model(x)
         assert out.shape[-2:] == (1, 1), f"Expected output spatial size (1,1), but got {out.shape[-2:]}"
 
@@ -91,7 +91,7 @@ class TestFrontCNN:
             out_hw=(64,64),
             pool='none',
         )
-        x = torch.randn(2, 153, 3, 512, 512)
+        x = torch.randn(2, 13, 3, 512, 512)
         out = model(x)
         assert out.shape[-2:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2:]}"
 
@@ -104,7 +104,7 @@ class TestFrontCNN:
     #         out_hw=(32,32),  # mismatched from natural 64x64
     #         pool='none',
     #     )
-    #     x = torch.randn(2, 153, 3, 512, 512)
+    #     x = torch.randn(2, 13, 3, 512, 512)
     #     with pytest.raises(ValueError, match="Output dimensions .* do not match target"):
     #         model(x)
 
@@ -118,7 +118,7 @@ class TestFrontCNN:
                 out_hw=(32,32),
                 pool=pool_type,
             )
-            x = torch.randn(2, 153, 3, 512, 512)
+            x = torch.randn(2, 13, 3, 512, 512)
             out = model(x)
             assert out.shape[-2:] == (32, 32), f"Expected output spatial size (32,32) with pool={pool_type}, but got {out.shape[-2:]}"
 
