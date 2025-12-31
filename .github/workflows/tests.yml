@@ -34,5 +34,6 @@ jobs:
     
     - name: Run tests
       working-directory: lakevision
+      timeout-minutes: 10
       run: |
         pytest tests/ -v --tb=short

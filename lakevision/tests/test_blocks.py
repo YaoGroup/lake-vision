@@ -66,7 +66,7 @@ class TestFrontCNN:
         )
         x = torch.randn(2, 153, 3, 512, 512)
         out = model(x)
-        assert out.shape[-2,:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2,:]}"
+        assert out.shape[-2,:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2:]}"
 
     def test_pool_to_1x1(self):
         """Test pooling to 1x1 output (e.g., if we wanted to just use the LSTM later not the CLSTM)."""
