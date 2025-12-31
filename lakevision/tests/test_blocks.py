@@ -51,7 +51,7 @@ class TestFrontCNN:
         )
         x = torch.randn(2, 153, 3, 512, 512)
         out = model(x)
-        assert out.shape[-2:] == (32, 32), f"Expected output spatial size (32,32), but got {out.shape[-2,:]}"
+        assert out.shape[-2:] == (32, 32), f"Expected output spatial size (32,32), but got {out.shape[-2:]}"
 
     def test_conditional_pooling_not_needed(self):
         """Test when conditional pooling is not needed."""
@@ -66,7 +66,7 @@ class TestFrontCNN:
         )
         x = torch.randn(2, 153, 3, 512, 512)
         out = model(x)
-        assert out.shape[-2,:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2:]}"
+        assert out.shape[-2:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2:]}"
 
     def test_pool_to_1x1(self):
         """Test pooling to 1x1 output (e.g., if we wanted to just use the LSTM later not the CLSTM)."""
@@ -79,7 +79,7 @@ class TestFrontCNN:
         )
         x = torch.randn(2, 153, 3, 512, 512)
         out = model(x)
-        assert out.shape[-2,:] == (1, 1), f"Expected output spatial size (1,1), but got {out.shape[-2,:]}"
+        assert out.shape[-2:] == (1, 1), f"Expected output spatial size (1,1), but got {out.shape[-2:]}"
 
     def test_pool_none_matching_dims(self):
         """Test pool='none' when dimensions naturally match."""
@@ -93,7 +93,7 @@ class TestFrontCNN:
         )
         x = torch.randn(2, 153, 3, 512, 512)
         out = model(x)
-        assert out.shape[-2,:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2,:]}"
+        assert out.shape[-2:] == (64, 64), f"Expected output spatial size (64,64), but got {out.shape[-2:]}"
 
     def test_pool_none_mismatched_dims_raise_error(self):
         """Test that pool='none' with mismatched dims raises error."""
@@ -120,7 +120,7 @@ class TestFrontCNN:
             )
             x = torch.randn(2, 153, 3, 512, 512)
             out = model(x)
-            assert out.shape[-2,:] == (32, 32), f"Expected output spatial size (32,32) with pool={pool_type}, but got {out.shape[-2,:]}"
+            assert out.shape[-2:] == (32, 32), f"Expected output spatial size (32,32) with pool={pool_type}, but got {out.shape[-2:]}"
 
     def test_invalid_pool_type_raises_error(self):
         """Test that invalid pool type raises error."""
