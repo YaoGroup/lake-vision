@@ -1,21 +1,21 @@
 # lakevision/models/__init__.py
 
-from .blocks import (
+from .models.blocks import (
     FrontCNN,
     ScalarLSTM,
     ClassHeadMLP,
     GlobalPooling,
 )
-from .convlstm import (
+from .models.convlstm import (
     CellCLSTM,
     CLSTM,
 )
-from .attention import (
+from .models.attention import (
     SpatialCBAM,
     FullCBAM,
     build_attention,
 )
-from .classifier import (
+from .models.classifier import (
     LakeDrainageClassifier,
 )
 
