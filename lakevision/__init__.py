@@ -13,8 +13,8 @@ from .models.blocks import (
 )
 
 from .models.clstm import (
-    ConvLSTMCell,
-    ConvLSTM,
+    CellCLSTM,
+    CLSTM,
 )
 
 from .models.attention import (
