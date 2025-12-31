@@ -1,37 +1,43 @@
-# lakevision/models/__init__.py
+"""
+Lakevision package for supraglacial lake drainage classification.
+"""
 
+__version__ = "0.1.0"
+
+# Import models
 from .models.blocks import (
     FrontCNN,
     ScalarLSTM,
     ClassHeadMLP,
     GlobalPooling,
 )
-from .models.convlstm import (
-    CellCLSTM,
-    CLSTM,
+
+from .models.clstm import (  # ← Changed from convlstm to clstm
+    ConvLSTMCell,
+    ConvLSTM,
 )
+
 from .models.attention import (
     SpatialCBAM,
     FullCBAM,
-    build_attention,
 )
+
 from .models.classifier import (
     LakeDrainageClassifier,
 )
 
 __all__ = [
-    # Basic blocks
+    # Blocks
     'FrontCNN',
     'ScalarLSTM',
     'ClassHeadMLP',
     'GlobalPooling',
     # ConvLSTM
-    'CellCLSTM',
-    'CLSTM',
+    'ConvLSTMCell',
+    'ConvLSTM',
     # Attention
     'SpatialCBAM',
     'FullCBAM',
-    'build_attention',
-    # Models
+    # Classifier
     'LakeDrainageClassifier',
 ]
