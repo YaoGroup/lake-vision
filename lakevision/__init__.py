@@ -12,7 +12,7 @@ from .models.blocks import (
     GlobalPooling,
 )
 
-from .models.clstm import (  # ← Changed from convlstm to clstm
+from .models.clstm import (
     ConvLSTMCell,
     ConvLSTM,
 )
@@ -33,8 +33,8 @@ __all__ = [
     'ClassHeadMLP',
     'GlobalPooling',
     # ConvLSTM
-    'ConvLSTMCell',
-    'ConvLSTM',
+    'CellCLSTM',
+    'CLSTM',
     # Attention
     'SpatialCBAM',
     'FullCBAM',
