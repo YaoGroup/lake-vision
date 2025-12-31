@@ -22,7 +22,7 @@ class TestFrontCNN:
     def test_basic_forward(self):
         """Test basic forward pass of FrontCNN."""
         model = FrontCNN(in_channels=3, base_channels=8, num_layers=3)
-        x = torch.randn(2, 153, 4, 512, 512)  # [B=2, T=153, C=4, H=512, W=512]
+        x = torch.randn(2, 153, 3, 512, 512)  # [B=2, T=153, C=4, H=512, W=512]
         out = model(x)
 
         # with 3 layers and default out_hw=(32,32) we expect output shape to be [B=2, T=153, C=32, H=32, W=32]
@@ -51,7 +51,7 @@ class TestFrontCNN:
         )
         x = torch.randn(2, 153, 3, 512, 512)
         out = model(x)
-        assert out.shape[-2,:] == (32, 32), f"Expected output spatial size (32,32), but got {out.shape[-2,:]}"
+        assert out.shape[-2:] == (32, 32), f"Expected output spatial size (32,32), but got {out.shape[-2,:]}"
 
     def test_conditional_pooling_not_needed(self):
         """Test when conditional pooling is not needed."""
@@ -128,7 +128,7 @@ class TestFrontCNN:
             FrontCNN(in_channels=3, base_channels=8, num_layers=2, pool='invalid')
 
     def test_different_input_sizes(self):
-        "Test with different input spatial sizes (though we will always use 512x512)"
+        """Test with different input spatial sizes (though we will always use 512x512)."""
         model = FrontCNN(in_channels=3, base_channels=8, num_layers=2, out_hw=(64,64))
 
         sizes = [(256,256), (512,512), (1024,1024)]
