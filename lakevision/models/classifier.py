@@ -129,7 +129,7 @@ class LakeDrainageClassifier(nn.Module):
             # (1) FrontCNN for RGB
             self.frontcnn_rgb = FrontCNN(
                 in_channels=3,
-                base_channels=frontcnn_base_channels
+                base_channels=frontcnn_base_channels,
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
                 pool_type=frontcnn_pool,
