@@ -41,6 +41,7 @@ To run tests for a specific module:
 pytest lakevision/tests/test_attention.py
 pytest lakevision/tests/test_clstm.py
 pytest lakevision/tests/test_blocks.py
+pytest lakevision/tests/test_classifier.py
 ```
 
 To run tests with verbose output:
@@ -59,3 +60,4 @@ The test suite covers:
 - **Attention mechanisms** ([test_attention.py](lakevision/tests/test_attention.py)): SpatialCBAM and FullCBAM
 - **Convolutional LSTM** ([test_clstm.py](lakevision/tests/test_clstm.py)): CellCLSTM and CLSTM
 - **Building blocks** ([test_blocks.py](lakevision/tests/test_blocks.py)): ScalarLSTM, ClassHeadMLP, GlobalPooling
+- **Full classifier** ([test_classifier.py](lakevision/tests/test_classifier.py)): LakeDrainageClassifier (integrated model)
