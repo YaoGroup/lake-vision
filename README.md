@@ -24,3 +24,38 @@ Model training information
 
 ### Model Inference
 Model inference information
+
+## Tests
+
+The project includes comprehensive test coverage for all core components. Tests are written using pytest and located in the [lakevision/tests](lakevision/tests) directory.
+
+### Running Tests
+
+To run all tests:
+```bash
+pytest lakevision/tests/
+```
+
+To run tests for a specific module:
+```bash
+pytest lakevision/tests/test_attention.py
+pytest lakevision/tests/test_clstm.py
+pytest lakevision/tests/test_blocks.py
+```
+
+To run tests with verbose output:
+```bash
+pytest lakevision/tests/ -v
+```
+
+To run a specific test function:
+```bash
+pytest lakevision/tests/test_attention.py::TestSpatialCBAM::test_basic_forward
+```
+
+### Test Coverage
+
+The test suite covers:
+- **Attention mechanisms** ([test_attention.py](lakevision/tests/test_attention.py)): SpatialCBAM and FullCBAM
+- **Convolutional LSTM** ([test_clstm.py](lakevision/tests/test_clstm.py)): CellCLSTM and CLSTM
+- **Building blocks** ([test_blocks.py](lakevision/tests/test_blocks.py)): ScalarLSTM, ClassHeadMLP, GlobalPooling
