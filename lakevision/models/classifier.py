@@ -7,7 +7,7 @@ from satellite imagery sequences and scalar time series data.
 import torch
 import torch.nn as nn
 
-from .blocks import FrontCNN, ScalarLSTM, ClassHeadMLP
+from .blocks import FrontCNN, ScalarLSTM, ClassHeadMLP, GlobalPooling
 from .clstm import CLSTM
 from .attention import SpatialCBAM, FullCBAM
 
@@ -132,9 +132,9 @@ class LakeDrainageClassifier(nn.Module):
                 base_channels=frontcnn_base_channels,
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
-                pool_type=frontcnn_pool,
+                pool=frontcnn_pool,
             )
-            frontcnn_out_channels = self.frontcnn_rgb.out_channels
+            frontcnn_out_channels = self.frontcnn_rgb.output_channels
 
             # (2) APPLY ATTENTION
             if self.attention_type == 'spatial':
@@ -157,7 +157,7 @@ class LakeDrainageClassifier(nn.Module):
                     base_channels=frontcnn_base_channels,
                     num_layers=frontcnn_num_layers,
                     out_hw=frontcnn_out_hw,
-                    pool_type=frontcnn_pool,
+                    pool=frontcnn_pool,
                 )
             else: # no attention
                 self.attention = nn.Identity()
@@ -212,8 +212,8 @@ class LakeDrainageClassifier(nn.Module):
 
         self.classifier = ClassHeadMLP(
             input_dim=classifier_input_dim,
-            hidden_dim=classhead_hidden,
-            output_dim=num_classes,
+            hidden_dims=classhead_hidden,
+            num_classes=num_classes,
             dropout=classhead_dropout,
             activation=classhead_activation,
         )
@@ -294,9 +294,9 @@ class LakeDrainageClassifier(nn.Module):
         
         if self.use_imgseq:
             if self.pool_type == 'both':
-                dims['img_features'] = self.convlstm.hidden_channels * 2
+                dims['img_features'] = self.clstm.hidden_channels * 2
             else:
-                dims['img_features'] = self.convlstm.hidden_channels
+                dims['img_features'] = self.clstm.hidden_channels
         
         if self.use_areaseq:
             dims['area_features'] = self.area_lstm.lstm.hidden_size
