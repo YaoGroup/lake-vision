@@ -57,31 +57,34 @@ class SpatialCBAM(nn.Module):
         )
         self.sigmoid = nn.Sigmoid()
 
-        def forward(self, x):
-            """
-            Apply spatial attention to input features.
+    def forward(self, x):
+        """
+        Apply spatial attention to input features.
 
-            Process:
-                1. pool across channels using avg and max pooling
-                2. concatenate pooled features
-                3. apply convolution to generate attn map
-                4. appl sigmoid and multiply with input
-            """
-            B, T, C, H, W = x.shape
+        Process:
+            1. pool across channels using avg and max pooling
+            2. concatenate pooled features
+            3. apply convolution to generate attn map
+            4. appl sigmoid and multiply with input
+        """
+        B, T, C, H, W = x.shape
 
-            # flatten time into batch -> [B*T, C, H, W]
-            x = x.reshape(B*T, C, H, W)
+        # flatten time into batch -> [B*T, C, H, W]
+        x = x.reshape(B*T, C, H, W)
 
-            # compute spatial attention map using max and average pooling across channels
-            avg_pool = torch.mean(x, dim=1, keepdim=True)       # [B*T, 1, H, W]
-            max_pool, _ = torch.max(x, dim=1, keepdim=True)     # [B*T, 1, H, W]
-            attn_input = torch.cat([avg_pool, max_pool], dim=1) # [B*T, 2, H, W]
-            attn_map = self.sigmoid(self.conv(attn_input))      # [B*T, 1, H, W]
-            
-            # reshape separating batch and time
-            x = x.reshape(B, T, C, H, W)
+        # compute spatial attention map using max and average pooling across channels
+        avg_pool = torch.mean(x, dim=1, keepdim=True)       # [B*T, 1, H, W]
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)     # [B*T, 1, H, W]
+        attn_input = torch.cat([avg_pool, max_pool], dim=1) # [B*T, 2, H, W]
+        attn_map = self.sigmoid(self.conv(attn_input))      # [B*T, 1, H, W]
 
-            return x
+        # apply attention map to input
+        x = x * attn_map  # [B*T, C, H, W]
+
+        # reshape separating batch and time
+        x = x.reshape(B, T, C, H, W)
+
+        return x
         
 class FullCBAM(nn.Module):
     """
