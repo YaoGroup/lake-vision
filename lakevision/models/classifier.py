@@ -206,6 +206,10 @@ class LakeDrainageClassifier(nn.Module):
         if classifier_input_dim == 0:
             raise ValueError("At least one of use_imgseq, use_areaseq, or use_cloudyseq must be True.")
 
+        # cloudyseq cannot be used alone; it requires imgseq or areaseq
+        if use_cloudyseq and not (use_imgseq or use_areaseq):
+            raise ValueError("use_cloudyseq cannot be enabled alone; it requires use_imgseq or use_areaseq to also be True.")
+
         self.classifier = ClassHeadMLP(
             input_dim=classifier_input_dim,
             hidden_dim=classhead_hidden,
