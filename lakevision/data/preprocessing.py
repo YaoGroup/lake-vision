@@ -245,7 +245,7 @@ def extract_rgb_channels(
 
 def extract_mask_channel(
     ds_img: xr.Dataset,
-    mask_band_name: str = 'scl',
+    mask_band_name: str = 'mask',
     reflectance_var: str = 'reflectance',
 ) -> np.ndarray:
     """
@@ -253,8 +253,7 @@ def extract_mask_channel(
 
     Args:
         ds_img: Imagery dataset with reflectance data
-        mask_band_name: Name of the mask band in common_name coordinate
-            Common options: 'scl' (Scene Classification Layer), 'mask'
+        mask_band_name: Name of the mask band in common_name coordinate (default: 'mask')
         reflectance_var: Name of reflectance variable (default: 'reflectance')
 
     Returns:
@@ -262,7 +261,7 @@ def extract_mask_channel(
 
     Example:
         >>> ds_img = load_imagery_timestack('tstack_CW2019_1579.nc')
-        >>> mask = extract_mask_channel(ds_img, mask_band_name='scl')
+        >>> mask = extract_mask_channel(ds_img, mask_band_name='mask')
         >>> print(mask.shape)  # (153, 1, 512, 512)
     """
     band_names = ds_img.coords['common_name'].values
@@ -287,7 +286,7 @@ def combine_lake_data(
     area_ds: xr.Dataset,
     lake_id: str,
     output_path: Optional[str] = None,
-    mask_band_name: str = 'scl',
+    mask_band_name: str = 'mask',
     fill_nans: bool = True,
 ) -> xr.Dataset:
     """
@@ -302,7 +301,7 @@ def combine_lake_data(
         area_ds: xarray Dataset containing area sequences (already loaded)
         lake_id: Lake ID to extract (e.g., 'CW2019_1579')
         output_path: Optional path to save combined .nc file. If None, doesn't save.
-        mask_band_name: Name of mask band (default: 'scl')
+        mask_band_name: Name of mask band (default: 'mask')
         fill_nans: Whether to fill NaNs in water area (default: True)
 
     Returns:
