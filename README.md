@@ -13,14 +13,11 @@ Installation guide...
 
 <img src="assets/training_visualization.gif" alt="Training Visualization" width="480px" />
 
-## Usage
-Usage guide for the different functionalities...
-
-### Data Pipeline
+## Data Pipeline
 
 The data preprocessing pipeline combines multi-source lake data into standardized NetCDF files for training and inference.
 
-#### Data Sources
+### Data Sources
 
 - **Imagery timestacks**: Sentinel-2 satellite imagery sequences (`lakevision/data/samples/imgseqs/`)
   - Format: `.nc` files with reflectance bands (red, green, blue, mask/SCL)
@@ -32,7 +29,7 @@ The data preprocessing pipeline combines multi-source lake data into standardize
   - Variables: `S2_water` (Sentinel-2 derived water area)
   - Temporal coverage: Full year 2019
 
-#### Preprocessing Functions
+### Preprocessing Functions
 
 The [lakevision/data/preprocessing.py](lakevision/data/preprocessing.py) module provides utilities for:
 
@@ -53,7 +50,7 @@ The [lakevision/data/preprocessing.py](lakevision/data/preprocessing.py) module 
 4. **Combining data**:
    - `combine_lake_data()`: Merge imagery and area data into single standardized `.nc` file
 
-#### Combined Dataset Format
+### Combined Dataset Format
 
 Each processed lake is saved as a single `.nc` file with the following structure:
 
@@ -79,7 +76,7 @@ xr.Dataset {
 }
 ```
 
-#### Usage Example
+### Usage Example
 
 ```python
 from lakevision.data.preprocessing import load_area_sequences, combine_lake_data
