@@ -21,7 +21,9 @@ class LakeDataset(Dataset):
         data_paths: path to a single .nc file, a directory of .nc files, or a list of .nc file paths
         seq_len: length of temporal sequence to extract (centered on max water area date)
         label: optional integer label for all samples (for single-class datasets).
-        labels_file: optional path to a labels file mapping lake_id -> label.
+        labels_file: optional path to a labels CSV file.
+        label_col: column name for labels in CSV (default: 'label')
+        id_col: column name for lake IDs in CSV (default: 'lake_id')
         transform: Optional transform to apply to imagery tensors.
 
     Returns per sample:
@@ -36,6 +38,8 @@ class LakeDataset(Dataset):
         seq_len: int = 153,
         label: Optional[int] = None,
         labels_file: Optional[Union[str, Path]] = None,
+        label_col: str = 'label',
+        id_col: str = 'lake_id',
         transform=None
     ):
         self.seq_len = seq_len
@@ -50,7 +54,7 @@ class LakeDataset(Dataset):
         # load labels if provided
         self.labels = {}
         if labels_file is not None:
-            self.labels = self._load_labels(labels_file)
+            self.labels = self._load_labels(labels_file, id_col, label_col)
 
     def _collect_paths(self, data_paths) -> List[Path]:
         """Collect all .nc file paths from input."""
@@ -66,10 +70,21 @@ class LakeDataset(Dataset):
             # list of paths
             return [Path(p) for p in data_paths]
 
-    def _load_labels(self, labels_file: Union[str, Path]) -> dict:
-        """Load labels from a file. Expects CSV with columns: lake_id, label."""
+    def _load_labels(self, labels_file: Union[str, Path], id_col: str, label_col: str) -> dict:
+        """Load labels from CSV file.
+
+        Args:
+            labels_file: path to CSV file
+            id_col: column name for lake IDs (e.g., 'lake_id', 'new_id')
+            label_col: column name for labels (e.g., 'label', 'final_label')
+
+        Returns:
+            dict mapping lake_id -> label (int)
+        """
         df = pd.read_csv(labels_file)
-        return dict(zip(df['lake_id'], df['label']))
+        # Drop rows with missing values in required columns
+        df = df.dropna(subset=[id_col, label_col])
+        return dict(zip(df[id_col], df[label_col].astype(int)))
 
     def __len__(self):
         return len(self.file_paths)
