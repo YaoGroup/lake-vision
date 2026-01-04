@@ -142,3 +142,5 @@ The test suite covers:
 - **Convolutional LSTM** ([test_clstm.py](lakevision/tests/test_clstm.py)): CellCLSTM and CLSTM
 - **Building blocks** ([test_blocks.py](lakevision/tests/test_blocks.py)): ScalarLSTM, ClassHeadMLP, GlobalPooling
 - **Full classifier** ([test_classifier.py](lakevision/tests/test_classifier.py)): LakeDrainageClassifier (integrated model)
+- **Dataset loading** ([test_datasets.py](lakevision/tests/test_datasets.py)): LakeDataset class for loading processed NetCDF files
+- **End-to-end training** ([test_training.py](lakevision/tests/test_training.py)): Full training pipeline (data loading → forward pass → loss → backward pass)
