@@ -13,20 +13,27 @@ from pathlib import Path
 from lakevision.data.datasets import LakeDataset
 from lakevision.models.classifier import LakeDrainageClassifier
 
-# path to a real processed data .nc file
+# paths to real processed data and labels
 PROCESSED_DATA_PATH = Path(__file__).parent.parent.parent / "datasets" / "processed" / "CW2019_1579.nc"
+LABELS_PATH = Path(__file__).parent.parent.parent / "labels" / "labels_2019_volumes_CW_demo.csv"
 
 
 @pytest.mark.skipif(
-    not PROCESSED_DATA_PATH.exists(),
-    reason="No processed data available"
+    not PROCESSED_DATA_PATH.exists() or not LABELS_PATH.exists(),
+    reason="Processed data or labels not available"
 )
 class TestTrainingPipeline:
     """End-to-end training pipeline tests using real data."""
 
     def test_forward_pass(self):
         """Test a single forward pass through the model."""
-        dataset = LakeDataset(PROCESSED_DATA_PATH, seq_len=21, label=0)
+        dataset = LakeDataset(
+            PROCESSED_DATA_PATH,
+            seq_len=21,
+            labels_file=LABELS_PATH,
+            id_col='new_id',
+            label_col='label_rines'
+        )
         loader = DataLoader(dataset, batch_size=1)
 
         model = LakeDrainageClassifier(
@@ -44,7 +51,13 @@ class TestTrainingPipeline:
 
     def test_forward_backward_pass(self):
         """Test forward and backward pass (gradient computation)."""
-        dataset = LakeDataset(PROCESSED_DATA_PATH, seq_len=21, label=0)
+        dataset = LakeDataset(
+            PROCESSED_DATA_PATH,
+            seq_len=21,
+            labels_file=LABELS_PATH,
+            id_col='new_id',
+            label_col='label_rines'
+        )
         loader = DataLoader(dataset, batch_size=1)
 
         model = LakeDrainageClassifier(
@@ -67,7 +80,13 @@ class TestTrainingPipeline:
 
     def test_training_step(self):
         """Test a complete training step with optimizer."""
-        dataset = LakeDataset(PROCESSED_DATA_PATH, seq_len=21, label=0)
+        dataset = LakeDataset(
+            PROCESSED_DATA_PATH,
+            seq_len=21,
+            labels_file=LABELS_PATH,
+            id_col='new_id',
+            label_col='label_rines'
+        )
         loader = DataLoader(dataset, batch_size=1)
 
         model = LakeDrainageClassifier(
@@ -93,7 +112,13 @@ class TestTrainingPipeline:
 
     def test_attention_types(self):
         """Test training with different attention mechanisms."""
-        dataset = LakeDataset(PROCESSED_DATA_PATH, seq_len=21, label=0)
+        dataset = LakeDataset(
+            PROCESSED_DATA_PATH,
+            seq_len=21,
+            labels_file=LABELS_PATH,
+            id_col='new_id',
+            label_col='label_rines'
+        )
         loader = DataLoader(dataset, batch_size=1)
         img_seq, area_seq, label, lake_id = next(iter(loader))
 
@@ -115,7 +140,13 @@ class TestTrainingPipeline:
 
     def test_imgseq_only(self):
         """Test training with image sequence only."""
-        dataset = LakeDataset(PROCESSED_DATA_PATH, seq_len=21, label=0)
+        dataset = LakeDataset(
+            PROCESSED_DATA_PATH,
+            seq_len=21,
+            labels_file=LABELS_PATH,
+            id_col='new_id',
+            label_col='label_rines'
+        )
         loader = DataLoader(dataset, batch_size=1)
 
         model = LakeDrainageClassifier(
@@ -134,7 +165,13 @@ class TestTrainingPipeline:
 
     def test_areaseq_only(self):
         """Test training with area sequence only."""
-        dataset = LakeDataset(PROCESSED_DATA_PATH, seq_len=21, label=0)
+        dataset = LakeDataset(
+            PROCESSED_DATA_PATH,
+            seq_len=21,
+            labels_file=LABELS_PATH,
+            id_col='new_id',
+            label_col='label_rines'
+        )
         loader = DataLoader(dataset, batch_size=1)
 
         model = LakeDrainageClassifier(
