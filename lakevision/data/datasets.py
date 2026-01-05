@@ -24,7 +24,10 @@ class LakeDataset(Dataset):
         labels_file: optional path to a labels CSV file.
         label_col: column name for labels in CSV (default: 'label')
         id_col: column name for lake IDs in CSV (default: 'lake_id')
-        transform: Optional transform to apply to imagery tensors.
+        normalize_imagery: whether to normalize RGB channels (default: True)
+        imagery_scale: scale factor for RGB normalization, divides RGB values by this (default: 10000.0)
+        normalize_area: whether to min-max normalize water area per sample (default: True)
+        transform: Optional transform to apply to imagery tensors (applied after normalization).
 
     Returns per sample:
         img_seq: Tensor of shape [seq_len, 4, H, W] (RGB+mask)
@@ -40,10 +43,16 @@ class LakeDataset(Dataset):
         labels_file: Optional[Union[str, Path]] = None,
         label_col: str = 'label',
         id_col: str = 'lake_id',
+        normalize_imagery: bool = True,
+        imagery_scale: float = 10000.0,
+        normalize_area: bool = True,
         transform=None
     ):
         self.seq_len = seq_len
         self.default_label = label
+        self.normalize_imagery = normalize_imagery
+        self.imagery_scale = imagery_scale
+        self.normalize_area = normalize_area
         self.transform = transform
 
         # collect all .nc file paths
@@ -136,6 +145,16 @@ class LakeDataset(Dataset):
         img_seq = torch.tensor(img_seq, dtype=torch.float32)
         area_seq = torch.tensor(area_seq, dtype=torch.float32).unsqueeze(-1)
         label = torch.tensor(label, dtype=torch.long)
+
+        # normalize RGB channels (first 3), leave mask channel (4th) as-is
+        if self.normalize_imagery:
+            img_seq[:, :3, :, :] = img_seq[:, :3, :, :] / self.imagery_scale
+
+        # min-max normalize water area per sample
+        if self.normalize_area:
+            area_min = area_seq.min()
+            area_max = area_seq.max()
+            area_seq = (area_seq - area_min) / (area_max - area_min + 1e-8)
 
         # apply transform if provided
         if self.transform:
