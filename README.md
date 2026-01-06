@@ -155,10 +155,18 @@ Input Streams (configurable):
 - **arch**: Architecture-specific attention modifications
 
 #### ScalarLSTM (Time Series Processing)
-| Parameter | Options | Default | Description |
-|-----------|---------|---------|-------------|
-| `slstm_hidden_dim` | 8, 16, 32 | 16 | Hidden state dimension |
-| `slstm_num_layers` | 1, 2 | 1 | Number of LSTM layers |
+
+Processes 1D scalar sequences (water area, cloud fraction) through standard LSTM layers. The model supports multiple input stream configurations:
+
+| Configuration | Description |
+|---------------|-------------|
+| `use_imgseq=True, use_areaseq=True` | Full model: imagery + area sequences (default) |
+| `use_imgseq=True, use_areaseq=False` | Imagery only: spatial-temporal features |
+| `use_imgseq=False, use_areaseq=True` | Area only: lightweight baseline using just water area time series |
+| `use_imgseq=True, use_areaseq=True, use_cloudyseq=True` | All streams: adds cloud fraction |
+
+**Area-only mode** is useful as a baseline or when imagery is unavailable. The water area time series alone can capture drainage signatures (rapid area decrease = drainage event).
+
 
 #### ClassHeadMLP (Classification)
 | Parameter | Options | Default | Description |
