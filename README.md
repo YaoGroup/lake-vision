@@ -178,14 +178,6 @@ Input Streams (configurable):
 | `weight_decay` | 0, 1e-5, 1e-4 | L2 regularization |
 | `epochs` | 50-200 | Training epochs |
 
-### Cross-Validation Strategy
-
-Suggested order for hyperparameter search:
-1. **Input ablation**: imagery only vs area only vs both
-2. **Attention**: none vs spatial vs full
-3. **Model capacity**: CNN channels, CLSTM hidden dim
-4. **Regularization**: dropout, weight decay
-5. **Sequence length**: temporal context window
 
 ### Model Inference
 Model inference information
