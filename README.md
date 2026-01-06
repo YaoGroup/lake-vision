@@ -100,8 +100,92 @@ print(ds['imagery'].shape)    # (153, 4, 512, 512)
 print(ds['water_area'].shape) # (153,)
 ```
 
-### Model Training
-Model training information
+## Model Architecture
+
+The `LakeDrainageClassifier` is a multi-stream temporal model that processes satellite imagery sequences and/or scalar time series to classify lake drainage events.
+
+```
+Input Streams (configurable):
+├── Image Sequence [B, T, 4, H, W] ──► FrontCNN ──► CLSTM ──► GlobalPooling ──► features
+├── Area Sequence [B, T, 1] ─────────────────────► ScalarLSTM ─────────────► features
+└── Cloudy Sequence [B, T, 1] ────────────────────► ScalarLSTM ─────────────► features
+                                                                                  │
+                                                          concatenate ◄──────────┘
+                                                              │
+                                                              ▼
+                                                        ClassHeadMLP
+                                                              │
+                                                              ▼
+                                                      logits [B, num_classes]
+```
+
+### Configurable Hyperparameters
+
+#### Input Streams
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `use_imgseq` | True/False | True | Use satellite imagery sequence |
+| `use_areaseq` | True/False | True | Use water area time series |
+| `use_cloudyseq` | True/False | False | Use cloudy tile fraction sequence |
+
+#### FrontCNN (Image Feature Extraction)
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `cnn_base_channels` | 8, 16, 32 | 8 | Base channel count (doubles each layer) |
+| `cnn_num_layers` | 2, 3, 4 | 3 | Number of conv layers |
+| `cnn_out_hw` | (8,8), (16,16), (32,32) | (32,32) | Output spatial dimensions |
+| `cnn_pool` | 'max', 'avg' | 'max' | Pooling type |
+
+#### CLSTM (Spatiotemporal Processing)
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `clstm_hidden_dim` | 16, 32, 64 | 32 | Hidden state dimension |
+| `clstm_num_layers` | 1, 2, 3 | 1 | Number of stacked CLSTM layers |
+
+#### Attention Mechanisms
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `attention_type` | 'none', 'spatial', 'full', 'arch' | 'none' | Type of attention |
+| `global_pool_type` | 'avg', 'max', 'both' | 'avg' | Global pooling method |
+
+**Attention types explained:**
+- **none**: No attention, direct CLSTM output
+- **spatial**: CBAM spatial attention only (learns *where* to focus)
+- **full**: CBAM channel + spatial attention (learns *what* features and *where*)
+- **arch**: Architecture-specific attention modifications
+
+#### ScalarLSTM (Time Series Processing)
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `slstm_hidden_dim` | 8, 16, 32 | 16 | Hidden state dimension |
+| `slstm_num_layers` | 1, 2 | 1 | Number of LSTM layers |
+
+#### ClassHeadMLP (Classification)
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `mlp_hidden_dims` | None, 32, 64, [64,32] | 64 | Hidden layer dimensions |
+| `mlp_dropout` | 0.0 - 0.5 | 0.0 | Dropout probability |
+| `mlp_activation` | 'relu', 'leakyrelu', 'gelu' | 'relu' | Activation function |
+| `num_classes` | 4, 5, ... | 4 | Number of output classes |
+
+### Training Hyperparameters
+
+| Parameter | Typical Range | Description |
+|-----------|---------------|-------------|
+| `seq_len` | 11, 21, 31, 51 | Temporal sequence length |
+| `batch_size` | 2, 4, 8, 16 | Batch size |
+| `learning_rate` | 1e-5 to 1e-3 | Learning rate |
+| `weight_decay` | 0, 1e-5, 1e-4 | L2 regularization |
+| `epochs` | 50-200 | Training epochs |
+
+### Cross-Validation Strategy
+
+Suggested order for hyperparameter search:
+1. **Input ablation**: imagery only vs area only vs both
+2. **Attention**: none vs spatial vs full
+3. **Model capacity**: CNN channels, CLSTM hidden dim
+4. **Regularization**: dropout, weight decay
+5. **Sequence length**: temporal context window
 
 ### Model Inference
 Model inference information
