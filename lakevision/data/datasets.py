@@ -148,7 +148,7 @@ class LakeDataset(Dataset):
 
         # normalize RGB channels (first 3), leave mask channel (4th) as-is
         if self.normalize_imagery:
-            img_seq[:, :3, :, :] = img_seq[:, :3, :, :] / self.imagery_scale
+            img_seq[:, :3, :, :] = torch.clamp(img_seq[:, :3, :, :] / self.imagery_scale, 0.0, 1.0)
 
         # min-max normalize water area per sample
         if self.normalize_area:

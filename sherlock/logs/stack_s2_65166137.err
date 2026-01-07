@@ -1,19 +1,0 @@
-The following modules were not unloaded:
-  (Use "module --force purge" to unload all):
-
-  1) devel   2) math
-Processing lakes:   0%|          | 0/1000 [00:00<?, ?it/s]Processing lakes:   0%|          | 0/1000 [07:51<?, ?it/s]
-Traceback (most recent call last):
-  File "/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/lakevision/s2_stacking.py", line 93, in <module>
-    write_netcdf_from_da(timestack, outfile)
-  File "/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/.venv/src/sat-tile-stack/src/sat_tile_stack/io.py", line 87, in write_netcdf_from_da
-    ds.to_netcdf(
-  File "/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/.venv/lib/python3.12/site-packages/xarray/core/dataset.py", line 2021, in to_netcdf
-    return to_netcdf(  # type: ignore[return-value]  # mypy cannot resolve the overloads:(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/.venv/lib/python3.12/site-packages/xarray/backends/api.py", line 1911, in to_netcdf
-    store = store_open(target, mode, format, group, **kwargs)
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/.venv/lib/python3.12/site-packages/xarray/backends/netCDF4_.py", line 414, in open
-    import netCDF4
-ModuleNotFoundError: No module named 'netCDF4'
