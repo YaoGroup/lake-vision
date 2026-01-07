@@ -16,7 +16,15 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lakevision.data.preprocessing import load_area_sequences, combine_lake_data
+import importlib.util
+spec = importlib.util.spec_from_file_location(
+    "preprocessing",
+    Path(__file__).parent.parent / "lakevision" / "data" / "preprocessing.py"
+)
+preprocessing = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(preprocessing)
+load_area_sequences = preprocessing.load_area_sequences
+combine_lake_data = preprocessing.combine_lake_data
 
 
 def main():
