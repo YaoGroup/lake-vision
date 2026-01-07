@@ -18,12 +18,12 @@ module load python/3.12
 # activate virtual environment
 source /oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/.venv/bin/activate
 
-# Set paths - EDIT THESE
+# Set paths
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
-TSTACK_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks"  # EDIT: path to your raw tstacks
-AREA_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/all_lakes_2019.nc"  # EDIT: path to area sequences
+TSTACK_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks"  # path to raw tstacks
+AREA_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/all_lakes_2019.nc"  # path to area sequences .nc file
 OUTPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/processed"
-MAX_LAKES=50  # Set to empty string for all lakes: MAX_LAKES=""
+MAX_LAKES=  # Set to empty string for all lakes: MAX_LAKES=""
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
