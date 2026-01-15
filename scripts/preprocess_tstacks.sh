@@ -26,8 +26,8 @@ pip install --user xarray netcdf4
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
 TSTACK_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks"
 AREA_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/all_lakes_2019.nc"
-OUTPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_processed"
-MAX_LAKES=20  # Set to empty string for all lakes, or a number to limit
+OUTPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/processed"
+MAX_LAKES=  # Set to empty string for all lakes, or a number to limit
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
