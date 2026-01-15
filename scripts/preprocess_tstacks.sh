@@ -29,21 +29,34 @@ AREA_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/all_lakes_2019.nc"
 OUTPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/processed"
 MAX_LAKES=  # Set to empty string for all lakes, or a number to limit
 
+# Spectral bands configuration
+# By default, includes NIR + SWIR1 + SWIR2 bands (7 channels total: RGB + NIR + SWIR1 + SWIR2 + mask)
+# Set to "true" to only include RGB + mask (4 channels, legacy mode)
+NO_SPECTRAL=""
+# Customize which spectral bands to include (default: nir swir1 swir2)
+SPECTRAL_BANDS="nir swir1 swir2"
+
 # Create output directory
 mkdir -p $OUTPUT_DIR
 
-# Run preprocessing
-if [ -z "$MAX_LAKES" ]; then
-    python3 $REPO_DIR/scripts/preprocess_tstacks.py \
-        --tstack_dir $TSTACK_DIR \
-        --area_file $AREA_FILE \
-        --output_dir $OUTPUT_DIR
-else
-    python3 $REPO_DIR/scripts/preprocess_tstacks.py \
-        --tstack_dir $TSTACK_DIR \
-        --area_file $AREA_FILE \
-        --output_dir $OUTPUT_DIR \
-        --max_lakes $MAX_LAKES
+# Build command arguments
+CMD_ARGS="--tstack_dir $TSTACK_DIR --area_file $AREA_FILE --output_dir $OUTPUT_DIR"
+
+if [ -n "$MAX_LAKES" ]; then
+    CMD_ARGS="$CMD_ARGS --max_lakes $MAX_LAKES"
 fi
+
+if [ "$NO_SPECTRAL" = "true" ]; then
+    CMD_ARGS="$CMD_ARGS --no_spectral"
+else
+    CMD_ARGS="$CMD_ARGS --spectral_bands $SPECTRAL_BANDS"
+fi
+
+echo "Running preprocessing with spectral bands: $SPECTRAL_BANDS"
+echo "Output will have channels: red, green, blue, $SPECTRAL_BANDS, mask"
+echo ""
+
+# Run preprocessing
+python3 $REPO_DIR/scripts/preprocess_tstacks.py $CMD_ARGS
 
 echo "Done!"
