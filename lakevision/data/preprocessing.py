@@ -281,6 +281,44 @@ def extract_mask_channel(
 
     return mask.values
 
+
+def extract_spectral_channels(
+    ds_img: xr.Dataset,
+    band_names_to_extract: List[str],
+    reflectance_var: str = 'reflectance',
+) -> np.ndarray:
+    """
+    Extract specified spectral channels from imagery dataset.
+
+    Args:
+        ds_img: Imagery dataset with reflectance data
+        band_names_to_extract: List of band names to extract (e.g., ['nir', 'swir1', 'swir2'])
+        reflectance_var: Name of reflectance variable (default: 'reflectance')
+
+    Returns:
+        np.ndarray: Spectral array with shape [time, len(band_names_to_extract), y, x]
+
+    Example:
+        >>> ds_img = load_imagery_timestack('tstack_CW2019_1579.nc')
+        >>> spectral = extract_spectral_channels(ds_img, ['nir', 'swir1', 'swir2'])
+        >>> print(spectral.shape)  # (153, 3, 512, 512)
+    """
+    available_bands = ds_img.coords['common_name'].values
+    band_indices = []
+
+    for band_name in band_names_to_extract:
+        idx = np.where(available_bands == band_name)[0]
+        if len(idx) == 0:
+            available_str = ', '.join(available_bands)
+            raise ValueError(f"Band '{band_name}' not found. "
+                           f"Available bands: {available_str}")
+        band_indices.append(idx[0])
+
+    # Extract bands
+    spectral = ds_img[reflectance_var][:, band_indices, :, :]
+
+    return spectral.values
+
 def combine_lake_data(
     imagery_path: str,
     area_ds: xr.Dataset,
@@ -288,12 +326,15 @@ def combine_lake_data(
     output_path: Optional[str] = None,
     mask_band_name: str = 'mask',
     fill_nans: bool = True,
+    include_spectral_bands: bool = True,
+    spectral_bands: Optional[List[str]] = None,
 ) -> xr.Dataset:
     """
     Combine imagery and area data into a single dataset for one lake.
 
     Creates a standardized dataset with:
-    - imagery: [time, channel, y, x] where channel = [red, green, blue, mask]
+    - imagery: [time, channel, y, x] where channel = [red, green, blue, nir, swir1, swir2, mask]
+      (or [red, green, blue, mask] if include_spectral_bands=False)
     - water_area: [time] scalar sequence (NaNs filled)
 
     Args:
@@ -303,6 +344,8 @@ def combine_lake_data(
         output_path: Optional path to save combined .nc file. If None, doesn't save.
         mask_band_name: Name of mask band (default: 'mask')
         fill_nans: Whether to fill NaNs in water area (default: True)
+        include_spectral_bands: Whether to include NIR and SWIR bands (default: True)
+        spectral_bands: List of spectral bands to include. Default: ['nir', 'swir1', 'swir2']
 
     Returns:
         xr.Dataset: Combined dataset with imagery and water_area
@@ -310,24 +353,54 @@ def combine_lake_data(
     Example:
         >>> # Load area data once
         >>> area_ds = load_area_sequences('all_lakes_2019.nc')
-        >>> 
-        >>> # Combine for single lake
+        >>>
+        >>> # Combine for single lake (with NIR + SWIR)
         >>> ds = combine_lake_data(
         ...     imagery_path='tstack_CW2019_1579.nc',
         ...     area_ds=area_ds,
         ...     lake_id='CW2019_1579',
         ...     output_path='processed/CW2019_1579.nc'
         ... )
+        >>>
+        >>> # Combine for single lake (RGB only, legacy mode)
+        >>> ds = combine_lake_data(
+        ...     imagery_path='tstack_CW2019_1579.nc',
+        ...     area_ds=area_ds,
+        ...     lake_id='CW2019_1579',
+        ...     include_spectral_bands=False
+        ... )
     """
+    if spectral_bands is None:
+        spectral_bands = ['nir', 'swir1', 'swir2']
+
     # load imagery
     ds_img = load_imagery_timestack(imagery_path)
 
-    # extract RGB and mask channels
-    rgb = extract_rgb_channels(ds_img) # [time, 3, y, x]
-    mask = extract_mask_channel(ds_img, mask_band_name=mask_band_name) # [time, 1, y, x]
-    
-    # combine into a single imagery array [time, 4, y, x]
-    imagery = np.concatenate([rgb, mask], axis=1)
+    # extract RGB channels
+    rgb = extract_rgb_channels(ds_img)  # [time, 3, y, x]
+
+    # extract spectral bands if requested
+    if include_spectral_bands:
+        try:
+            spectral = extract_spectral_channels(ds_img, spectral_bands)  # [time, N, y, x]
+            channel_names = ['red', 'green', 'blue'] + spectral_bands + ['mask']
+        except ValueError as e:
+            print(f"Warning: Could not extract spectral bands: {e}")
+            print("Falling back to RGB-only mode.")
+            spectral = None
+            channel_names = ['red', 'green', 'blue', 'mask']
+    else:
+        spectral = None
+        channel_names = ['red', 'green', 'blue', 'mask']
+
+    # extract mask channel
+    mask = extract_mask_channel(ds_img, mask_band_name=mask_band_name)  # [time, 1, y, x]
+
+    # combine into a single imagery array
+    if spectral is not None:
+        imagery = np.concatenate([rgb, spectral, mask], axis=1)  # [time, 7, y, x]
+    else:
+        imagery = np.concatenate([rgb, mask], axis=1)  # [time, 4, y, x]
 
     # get water area for this lake
     time_coords, water_area = get_lake_water_area(
@@ -344,7 +417,7 @@ def combine_lake_data(
         print(f"Warning: Imagery has {len(img_time_coords)} timesteps, "
               f"area data has {len(time_coords)} timesteps")
         print(f"Aligning water area to imagery timestamps...")
-        
+
         # Align water area to imagery times
         water_area = align_water_area_to_imagery(
             water_area=water_area,
@@ -364,7 +437,7 @@ def combine_lake_data(
         },
         coords={
             'time': time_to_use,
-            'channel': ['red', 'green', 'blue', 'mask'],
+            'channel': channel_names,
             'lake_id': lake_id,
         },
         attrs={
@@ -372,6 +445,7 @@ def combine_lake_data(
             'lake_id': lake_id,
             'year': 2019,
             'source_imagery': imagery_path,
+            'channels': ', '.join(channel_names),
         },
     )
 

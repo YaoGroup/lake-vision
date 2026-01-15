@@ -53,6 +53,18 @@ def main():
         default="mask",
         help="Name of mask band in tstacks (default: 'mask')",
     )
+    parser.add_argument(
+        "--no_spectral",
+        action="store_true",
+        help="Exclude NIR and SWIR bands (RGB + mask only)",
+    )
+    parser.add_argument(
+        "--spectral_bands",
+        type=str,
+        nargs="+",
+        default=["nir", "swir1", "swir2"],
+        help="Spectral bands to include (default: nir swir1 swir2)",
+    )
 
     args = parser.parse_args()
 
@@ -95,6 +107,8 @@ def main():
                 output_path=str(output_path),
                 mask_band_name=args.mask_band,
                 fill_nans=True,
+                include_spectral_bands=not args.no_spectral,
+                spectral_bands=args.spectral_bands,
             )
             successful += 1
         except Exception as e:
