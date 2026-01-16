@@ -33,8 +33,9 @@ MAX_LAKES=  # Set to empty string for all lakes, or a number to limit
 # By default, includes NIR + SWIR1 + SWIR2 bands (7 channels total: RGB + NIR + SWIR1 + SWIR2 + mask)
 # Set to "true" to only include RGB + mask (4 channels, legacy mode)
 NO_SPECTRAL=""
-# Customize which spectral bands to include (default: nir swir1 swir2)
-SPECTRAL_BANDS="nir swir1 swir2"
+# Customize which spectral bands to include
+# Note: Sentinel-2 uses 'swir16' (band 11) and 'swir22' (band 12) naming
+SPECTRAL_BANDS="nir swir16 swir22"
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
