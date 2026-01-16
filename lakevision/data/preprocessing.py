@@ -292,7 +292,7 @@ def extract_spectral_channels(
 
     Args:
         ds_img: Imagery dataset with reflectance data
-        band_names_to_extract: List of band names to extract (e.g., ['nir', 'swir1', 'swir2'])
+        band_names_to_extract: List of band names to extract (e.g., ['nir', 'swir16', 'swir22'])
         reflectance_var: Name of reflectance variable (default: 'reflectance')
 
     Returns:
@@ -300,7 +300,7 @@ def extract_spectral_channels(
 
     Example:
         >>> ds_img = load_imagery_timestack('tstack_CW2019_1579.nc')
-        >>> spectral = extract_spectral_channels(ds_img, ['nir', 'swir1', 'swir2'])
+        >>> spectral = extract_spectral_channels(ds_img, ['nir', 'swir16', 'swir22'])
         >>> print(spectral.shape)  # (153, 3, 512, 512)
     """
     available_bands = ds_img.coords['common_name'].values
@@ -333,7 +333,7 @@ def combine_lake_data(
     Combine imagery and area data into a single dataset for one lake.
 
     Creates a standardized dataset with:
-    - imagery: [time, channel, y, x] where channel = [red, green, blue, nir, swir1, swir2, mask]
+    - imagery: [time, channel, y, x] where channel = [red, green, blue, nir, swir16, swir22, mask]
       (or [red, green, blue, mask] if include_spectral_bands=False)
     - water_area: [time] scalar sequence (NaNs filled)
 
@@ -345,7 +345,7 @@ def combine_lake_data(
         mask_band_name: Name of mask band (default: 'mask')
         fill_nans: Whether to fill NaNs in water area (default: True)
         include_spectral_bands: Whether to include NIR and SWIR bands (default: True)
-        spectral_bands: List of spectral bands to include. Default: ['nir', 'swir1', 'swir2']
+        spectral_bands: List of spectral bands to include. Default: ['nir', 'swir16', 'swir22']
 
     Returns:
         xr.Dataset: Combined dataset with imagery and water_area
@@ -371,7 +371,7 @@ def combine_lake_data(
         ... )
     """
     if spectral_bands is None:
-        spectral_bands = ['nir', 'swir1', 'swir2']
+        spectral_bands = ['nir', 'swir16', 'swir22']
 
     # load imagery
     ds_img = load_imagery_timestack(imagery_path)

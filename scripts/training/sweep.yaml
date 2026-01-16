@@ -20,22 +20,20 @@ metric:
 # =============================================================================
 # PARAMETER GRID
 # =============================================================================
-# Priority 1: Attention types (6 options)
-#   0 = none (RGB only, no attention)
-#   1 = blurmask as input channel (no CBAM)
-#   2 = RGB * blurmask as input (no CBAM)
-#   3 = CBAM spatial attention (RGB only)
-#   4 = CBAM spatial attention (RGB + blurmask)
-#   5 = architectural attention (separate mask pathway)
+# Priority 1: Attention types (4 options)
+#   none    = no attention (RGB features only)
+#   spatial = SpatialCBAM (spatial attention via avg/max pooling)
+#   full    = FullCBAM (channel attention + spatial attention)
+#   arch    = architectural attention (separate mask pathway, element-wise multiply)
 #
-# Priority 2: Input stream combinations (4 options)
-#   use_areaseq:   include water area time series
-#   use_cloudyseq: include cloudy pixel fraction time series
+# Priority 2: Input stream combinations (2 options)
+#   use_areaseq: include water area time series
+#   (use_cloudyseq not yet supported in LakeDataset)
 #
 # Priority 3: Training hyperparameters (2 options)
 #   optimizer: Adam vs SGD
 #
-# Total combinations: 6 x 2 x 2 x 2 = 48 runs
+# Total combinations: 4 x 2 x 2 = 16 runs
 # =============================================================================
 
 parameters:
@@ -43,7 +41,7 @@ parameters:
   # HIGH PRIORITY: Attention
   # -------------------------
   attention_type:
-    values: [0, 1, 2, 3, 4, 5]
+    values: ["none", "spatial", "full", "arch"]
 
   # -------------------------
   # MEDIUM PRIORITY: Input streams
@@ -55,7 +53,7 @@ parameters:
     values: [false, true]
 
   use_cloudyseq:
-    values: [false, true]
+    value: false  # not yet supported in LakeDataset
 
   # -------------------------
   # LOW PRIORITY: Training params

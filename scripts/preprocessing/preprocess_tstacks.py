@@ -62,8 +62,8 @@ def main():
         "--spectral_bands",
         type=str,
         nargs="+",
-        default=["nir", "swir1", "swir2"],
-        help="Spectral bands to include (default: nir swir1 swir2)",
+        default=["nir", "swir16", "swir22"],
+        help="Spectral bands to include (default: nir swir16 swir22)",
     )
 
     args = parser.parse_args()
