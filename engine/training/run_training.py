@@ -11,6 +11,7 @@ For wandb sweeps:
 import argparse
 import random
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -293,10 +294,20 @@ def train(config: dict):
     # Training loop
     best_val_loss = float("inf")
     epochs = config.get("epochs", 50)
+    epoch_times = []
+    training_start_time = time.time()
+
+    print(f"\nStarting training for {epochs} epochs...")
+    print("=" * 70)
 
     for epoch in range(epochs):
+        epoch_start_time = time.time()
+
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes)
+
+        epoch_time = time.time() - epoch_start_time
+        epoch_times.append(epoch_time)
 
         if scheduler:
             scheduler.step(val_loss)
@@ -311,17 +322,25 @@ def train(config: dict):
             "val_recall_macro": val_metrics["recall_macro"],
             "val_f1_macro": val_metrics["f1_macro"],
             "lr": optimizer.param_groups[0]["lr"],
+            "epoch_time_sec": epoch_time,
         }
 
         # Per-class metrics
         for class_name in CLASS_NAMES[:num_classes]:
             log_dict[f"val_f1_{class_name}"] = val_metrics[f"f1_{class_name}"]
 
+        # Calculate estimated time remaining
+        avg_epoch_time = sum(epoch_times) / len(epoch_times)
+        remaining_epochs = epochs - (epoch + 1)
+        eta_seconds = avg_epoch_time * remaining_epochs
+        eta_str = f"{int(eta_seconds // 3600)}h {int((eta_seconds % 3600) // 60)}m"
+
         print(
             f"Epoch {epoch+1}/{epochs} | "
             f"Loss: {train_loss:.4f}/{val_loss:.4f} | "
             f"Acc: {val_metrics['accuracy']:.3f} | "
-            f"F1: {val_metrics['f1_macro']:.3f}"
+            f"F1: {val_metrics['f1_macro']:.3f} | "
+            f"Time: {epoch_time:.1f}s | ETA: {eta_str}"
         )
 
         if WANDB_AVAILABLE and wandb.run is not None:
@@ -333,6 +352,16 @@ def train(config: dict):
             if config.get("save_path"):
                 torch.save(model.state_dict(), config["save_path"])
                 print(f"  Saved best model (val_loss={val_loss:.4f})")
+
+    # Training timing summary
+    total_training_time = time.time() - training_start_time
+    avg_epoch_time = sum(epoch_times) / len(epoch_times)
+    print("\n" + "=" * 70)
+    print("Training Complete!")
+    print(f"  Total training time: {total_training_time / 3600:.2f} hours ({total_training_time:.1f} seconds)")
+    print(f"  Average epoch time:  {avg_epoch_time:.1f} seconds")
+    print(f"  Best val loss:       {best_val_loss:.4f}")
+    print("=" * 70)
 
     # Final test evaluation
     test_loader = DataLoader(
