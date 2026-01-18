@@ -111,7 +111,7 @@ python3 "$REPO_DIR/engine/training/run_training.py" \
     --clstm_hidden 32 \
     --slstm_hidden 16 \
     --classhead_hidden 64 \
-    --classhead_dropout 0.2 \
+    --classhead_dropout 0.3 \
     --save_path "$SAVE_PATH" \
     --num_workers 4 \
     --seed 42

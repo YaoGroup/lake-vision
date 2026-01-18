@@ -90,6 +90,29 @@ Channel order in NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 
 - `'full'`: Full CBAM (channel + spatial)
 - `'arch'`: Architectural attention with separate mask pathway
 
+### Baseline Architecture Parameters
+
+| Component | Parameter | Value | Notes |
+|-----------|-----------|-------|-------|
+| **FrontCNN** | `base_channels` | 8 | Doubles each layer: 8→16→32→64 |
+| | `num_layers` | 4 | 512→256→128→64→32px spatial reduction |
+| | `out_hw` | (64,64) | Spatial resolution for ConvLSTM |
+| **ConvLSTM** | `hidden` | 32 | Temporal feature extraction |
+| | `kernel` | 3 | Must be odd |
+| **ScalarLSTM** | `hidden` | 16 | For area/cloudy sequences |
+| | `num_layers` | 1 | Single layer sufficient |
+| **ClassHead** | `hidden` | 64 | MLP hidden dimension |
+| | `dropout` | 0.3 | Regularization for small dataset |
+| **Features** | `use_areaseq` | True | Area is key drainage signal |
+| | `use_cloudyseq` | False | Start simple, add later |
+| **Attention** | `type` | none | Start simple, add later |
+
+Future experiments to try:
+- Increase capacity: `frontcnn_base_channels=16`, `clstm_hidden=64`
+- Add attention: `--attention_type spatial` or `full`
+- Multi-spectral: `--use_nir`, `--use_swir16`
+- Cloudy sequence: `--use_cloudyseq`
+
 ## Data Format
 
 ### NetCDF Lake Files

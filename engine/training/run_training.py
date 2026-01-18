@@ -55,8 +55,8 @@ def create_splits(
     id_col: str = 'new_id',
     label_col: str = 'label_rines',
     train_ratio: float = 0.7,
-    val_ratio: float = 0.15,
-    test_ratio: float = 0.15,
+    val_ratio: float = 0.20,
+    test_ratio: float = 0.10,
     seed: int = 42,
     stratify: bool = True,
 ):
@@ -197,8 +197,8 @@ def train(config: dict):
         id_col=config.get("id_col", "new_id"),
         label_col=config.get("label_col", "label_rines"),
         train_ratio=config.get("train_ratio", 0.7),
-        val_ratio=config.get("val_ratio", 0.15),
-        test_ratio=config.get("test_ratio", 0.15),
+        val_ratio=config.get("val_ratio", 0.20),
+        test_ratio=config.get("test_ratio", 0.10),
         seed=seed,
         stratify=config.get("stratify", True),
     )
