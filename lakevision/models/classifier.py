@@ -11,6 +11,10 @@ from .blocks import FrontCNN, ScalarLSTM, ClassHeadMLP, GlobalPooling
 from .clstm import CLSTM
 from .attention import SpatialCBAM, FullCBAM
 
+
+# Channel name to index mapping for NC files
+CHANNEL_NAMES = ['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 'mask']
+
 class LakeDrainageClassifier(nn.Module):
     """
     Lake drainage classification model.
@@ -28,6 +32,9 @@ class LakeDrainageClassifier(nn.Module):
         use_imgseq              (bool): whether to use image sequence processing (default: True)
         use_areaseq             (bool): whether to use water area time series (default: True)
         use_cloudyseq           (bool): whether to use cloud coverage time series (default: False)
+        use_nir                 (bool): whether to include NIR band in imagery (default: False)
+        use_swir16              (bool): whether to include SWIR16 band in imagery (default: False)
+        use_swir22              (bool): whether to include SWIR22 band in imagery (default: False)
         attention_type          (str): type of attention mechanism. Options:
             - 'none': no attention
             - 'spatial': spatial CBAM
@@ -53,10 +60,15 @@ class LakeDrainageClassifier(nn.Module):
         pool_type               (str): pooling type before classification head ('max', 'avg') (default: 'avg')
 
     Input:
-        x: [B, T, 4, H, W] tensor of image sequences
+        x: [B, T, C, H, W] tensor of image sequences
             B: batch size
             T: time steps
-            4: input image channels (RGB + lake mask if attention_type='arch')
+            C: input image channels (RGB + optional NIR/SWIR + mask)
+               Base: 3 RGB + 1 mask = 4 channels
+               With use_nir=True: +1 channel
+               With use_swir16=True: +1 channel
+               With use_swir22=True: +1 channel
+               Max: 7 channels (RGB + NIR + SWIR16 + SWIR22 + mask)
             H: height
             W: width
         area_seq: [B, T, 1] tensor of water area time series (optional)
@@ -70,9 +82,11 @@ class LakeDrainageClassifier(nn.Module):
                 use_imgseq=True,
                 use_areaseq=True,
                 use_cloudyseq=False,
+                use_nir=True,
+                use_swir16=True,
                 attention_type='spatial',
             )
-        >>> x = torch.randn(16, 153, 4, 512, 512)          # image sequences [B=16, T=153, C=4, H=512, W=512]
+        >>> x = torch.randn(16, 153, 6, 512, 512)          # image sequences [B=16, T=153, C=6, H=512, W=512]
         >>> area_seq = torch.randn(16, 153, 1)              # water area sequences [B=16, T=153, 1]
         >>> logits = model(x, area_seq)                    # output logits [B=16, num_classes=4]
     """
@@ -82,6 +96,10 @@ class LakeDrainageClassifier(nn.Module):
         use_imgseq=True,
         use_areaseq=True,
         use_cloudyseq=False,
+        # spectral band flags (beyond RGB)
+        use_nir=False,
+        use_swir16=False,
+        use_swir22=False,
         # attention configuration
         attention_type='none',
         # classification and imagery configuration (these may not change)
@@ -116,19 +134,32 @@ class LakeDrainageClassifier(nn.Module):
         self.use_imgseq = use_imgseq
         self.use_areaseq = use_areaseq
         self.use_cloudyseq = use_cloudyseq
+        self.use_nir = use_nir
+        self.use_swir16 = use_swir16
+        self.use_swir22 = use_swir22
         self.attention_type = attention_type.lower()
         self.pool_type = pool_type
+
+        # Calculate number of imagery channels (RGB + optional spectral bands)
+        # Mask is handled separately in the forward pass
+        self.n_imagery_channels = 3  # RGB base
+        if use_nir:
+            self.n_imagery_channels += 1
+        if use_swir16:
+            self.n_imagery_channels += 1
+        if use_swir22:
+            self.n_imagery_channels += 1
 
         # validate attention type
         valid_attention = ['none', 'spatial', 'full', 'arch']
         if self.attention_type not in valid_attention:
             raise ValueError(f"Invalid attention_type '{attention_type}'. Must be one of {valid_attention}.")
-        
+
         # == IMAGE SEQUENCE PROCESSING == #
         if use_imgseq:
-            # (1) FrontCNN for RGB
+            # (1) FrontCNN for imagery (RGB + optional spectral bands)
             self.frontcnn_rgb = FrontCNN(
-                in_channels=3,
+                in_channels=self.n_imagery_channels,
                 base_channels=frontcnn_base_channels,
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
@@ -234,12 +265,13 @@ class LakeDrainageClassifier(nn.Module):
 
         # == IMAGE SEQUENCE PROCESSING == #
         if self.use_imgseq:
-            # split the RGB and mask
-            rgb = x[:, :, :3, :, :]         # [B, T, 3, H, W]
-            mask = x[:, :, 3:, :, :]        # [B, T, 1, H, W]
+            # split the imagery channels and mask
+            # Imagery is all channels except the last one (mask)
+            imagery = x[:, :, :self.n_imagery_channels, :, :]  # [B, T, n_imagery_channels, H, W]
+            mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
 
-            # process RGB through FrontCNN
-            rgb_features = self.frontcnn_rgb(rgb)   # [B, T, C, Hf, Wf]
+            # process imagery through FrontCNN
+            rgb_features = self.frontcnn_rgb(imagery)   # [B, T, C, Hf, Wf]
 
             # apply attention
             if self.attention_type == 'arch':
@@ -311,13 +343,24 @@ class LakeDrainageClassifier(nn.Module):
     def __repr__(self):
         """Custom string representation showing model configuration."""
         feature_dims = self.get_feature_dims()
-        
+
+        # Build spectral bands string
+        spectral_bands = ['RGB']
+        if self.use_nir:
+            spectral_bands.append('NIR')
+        if self.use_swir16:
+            spectral_bands.append('SWIR16')
+        if self.use_swir22:
+            spectral_bands.append('SWIR22')
+        spectral_str = '+'.join(spectral_bands)
+
         config_str = (
             f"LakeDrainageClassifier(\n"
             f"  Features: "
             f"imgseq={self.use_imgseq}, "
             f"areaseq={self.use_areaseq}, "
             f"cloudyseq={self.use_cloudyseq}\n"
+            f"  Spectral bands: {spectral_str} ({self.n_imagery_channels} channels + mask)\n"
             f"  Attention: {self.attention_type}\n"
             f"  Feature dims: {feature_dims}\n"
             f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}\n"
