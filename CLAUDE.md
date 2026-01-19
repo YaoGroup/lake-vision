@@ -69,8 +69,27 @@ The main model (`LakeDrainageClassifier`) is a multi-stream temporal architectur
 
 - **Image stream**: FrontCNN → optional CBAM Attention → ConvLSTM → GlobalPooling → features
 - **Area stream**: ScalarLSTM → features
-- **Cloud stream** (optional): ScalarLSTM → features
+- **Cloud stream** (optional): ScalarLSTM → features (with optional learned temporal weights)
 - Features are concatenated and passed to ClassHeadMLP for 4-class classification
+
+### Learned Temporal Weights
+
+The model supports learnable per-timestep weights for scalar sequences (area and cloudy). When enabled, the model learns a `[seq_len]` vector of logits that are sigmoided and multiplied with the input sequence before LSTM processing:
+
+```python
+# Learnable logits [seq_len] initialized to 0 (sigmoid = 0.5)
+weights = sigmoid(self.logits)  # [T]
+weighted_seq = seq * weights    # [B, T, 1]
+```
+
+**Available options:**
+- `learn_area_weights=True`: Learn per-timestep weights for water area sequence
+- `learn_cloudy_weights=True`: Learn per-timestep weights for cloudy/usefulness sequence
+
+This allows the model to learn which timesteps in the sequence matter most. The model can learn patterns like:
+- "Late timesteps (near drainage event) matter more"
+- "Early timesteps can be downweighted"
+- "Position X in sequence is particularly informative"
 
 Input tensor shapes: `[B, T, C, H, W]` for imagery, `[B, T, 1]` for scalars.
 
@@ -105,6 +124,9 @@ Channel order in NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 
 | | `dropout` | 0.3 | Regularization for small dataset |
 | **Features** | `use_areaseq` | True | Area is key drainage signal |
 | | `use_cloudyseq` | False | Start simple, add later |
+| | `learn_area_weights` | False | Learn per-timestep weights for area_seq |
+| | `learn_cloudy_weights` | False | Learn per-timestep weights for cloudy_seq |
+| | `seq_len` | 32 | Sequence length (required when learn_*_weights=True) |
 | **Attention** | `type` | none | Start simple, add later |
 
 Future experiments to try:
@@ -112,6 +134,8 @@ Future experiments to try:
 - Add attention: `--attention_type spatial` or `full`
 - Multi-spectral: `--use_nir`, `--use_swir16`
 - Cloudy sequence: `--use_cloudyseq`
+- Learned area weights: `--learn_area_weights`
+- Learned cloudy weights: `--use_cloudyseq --learn_cloudy_weights`
 
 ## Data Format
 
@@ -215,3 +239,4 @@ wandb sync wandb/offline-run-*
 - Created `engine/training/run_training.sh` - SLURM script for Sherlock training
 - Added `band_stats` support for per-band normalization in `LakeDataset`
 - Consolidated all scripts under `engine/` directory (removed `scripts/`)
+- Added `learn_area_weights`, `learn_cloudy_weights`, and `seq_len` parameters to `LakeDrainageClassifier` for learnable per-timestep sequence weighting

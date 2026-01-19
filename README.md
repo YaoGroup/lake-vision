@@ -58,20 +58,29 @@ Each processed lake is saved as a single `.nc` file with the following structure
 xr.Dataset {
     dimensions:
         time: 153      # number of observations
-        channel: 4     # RGB + mask
+        channel: 7     # RGB + NIR + SWIR16 + SWIR22 + mask
         y: 512         # image height
         x: 512         # image width
 
     data_vars:
         imagery (time, channel, y, x): float32
-            # 4D image sequences [red, green, blue, mask]
+            # 4D image sequences [red, green, blue, nir, swir16, swir22, mask]
 
         water_area (time,): float32
             # 1D water area time series (NaNs filled)
 
+        cloudy_seq_rgb (time,): float32
+            # Tile usefulness predictions from RGB model (0=cloudy, 1=useful)
+
+        cloudy_seq_rgbn (time,): float32
+            # Tile usefulness predictions from RGB+NIR model
+
+        cloudy_seq_bns16 (time,): float32
+            # Tile usefulness predictions from B+NIR+SWIR16 model
+
     coords:
         time: datetime64[ns]
-        channel: ['red', 'green', 'blue', 'mask']
+        channel: ['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 'mask']
         lake_id: str
 }
 ```
@@ -126,7 +135,17 @@ Input Streams (configurable):
 |-----------|---------|---------|-------------|
 | `use_imgseq` | True/False | True | Use satellite imagery sequence |
 | `use_areaseq` | True/False | True | Use water area time series |
-| `use_cloudyseq` | True/False | False | Use cloudy tile fraction sequence |
+| `use_cloudyseq` | True/False | False | Use cloudy tile usefulness sequence |
+| `use_nir` | True/False | False | Include NIR band in imagery |
+| `use_swir16` | True/False | False | Include SWIR16 band in imagery |
+| `use_swir22` | True/False | False | Include SWIR22 band in imagery |
+
+#### Learned Temporal Weights
+| Parameter | Options | Default | Description |
+|-----------|---------|---------|-------------|
+| `learn_area_weights` | True/False | False | Learn per-timestep weights for area sequence |
+| `learn_cloudy_weights` | True/False | False | Learn per-timestep weights for cloudy sequence |
+| `seq_len` | 32, 153, ... | 32 | Sequence length (needed when learn_*_weights=True) |
 
 #### FrontCNN (Image Feature Extraction)
 | Parameter | Options | Default | Description |
