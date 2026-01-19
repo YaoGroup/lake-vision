@@ -58,6 +58,6 @@ echo "Output will have channels: red, green, blue, $SPECTRAL_BANDS, mask"
 echo ""
 
 # Run preprocessing
-python3 $REPO_DIR/scripts/preprocess_tstacks.py $CMD_ARGS
+python3 $REPO_DIR/engine/preprocessing/preprocess_tstacks.py $CMD_ARGS
 
 echo "Done!"
