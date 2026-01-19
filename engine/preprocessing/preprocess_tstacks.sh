@@ -22,7 +22,7 @@ ml py-pytorch/2.2.1_py312
 # install xarray if not available (into user space)
 pip install --user xarray netcdf4
 
-# Set paths
+# Set paths and add repo to PYTHONPATH
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
 TSTACK_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks"
 AREA_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/all_lakes_2019.nc"
@@ -36,6 +36,9 @@ NO_SPECTRAL=""
 # Customize which spectral bands to include
 # Note: Sentinel-2 uses 'swir16' (band 11) and 'swir22' (band 12) naming
 SPECTRAL_BANDS="nir swir16 swir22"
+
+# Add repo to PYTHONPATH so lakevision package is importable
+export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
