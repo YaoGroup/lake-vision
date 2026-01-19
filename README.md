@@ -105,7 +105,7 @@ ds = combine_lake_data(
     output_path='lakevision/data/samples/processed/CW2019_1579.nc'
 )
 
-print(ds['imagery'].shape)    # (153, 4, 512, 512)
+print(ds['imagery'].shape)    # (153, 7, 512, 512)
 print(ds['water_area'].shape) # (153,)
 ```
 
@@ -115,7 +115,7 @@ The `LakeDrainageClassifier` is a multi-stream temporal model that processes sat
 
 ```
 Input Streams (configurable):
-├── Image Sequence [B, T, 4, H, W] ──► FrontCNN ──► CLSTM ──► GlobalPooling ──► features
+├── Image Sequence [B, T, C, H, W] ──► FrontCNN ──► CLSTM ──► GlobalPooling ──► features
 ├── Area Sequence [B, T, 1] ─────────────────────► ScalarLSTM ─────────────► features
 └── Cloudy Sequence [B, T, 1] ────────────────────► ScalarLSTM ─────────────► features
                                                                                   │
@@ -126,6 +126,12 @@ Input Streams (configurable):
                                                               │
                                                               ▼
                                                       logits [B, num_classes]
+
+Where:
+  B = batch size
+  T = sequence length (number of timesteps)
+  C = channels (3-7 depending on spectral bands: RGB + optional NIR/SWIR16/SWIR22 + mask)
+  H, W = spatial dimensions (512×512)
 ```
 
 ### Configurable Hyperparameters
@@ -172,6 +178,13 @@ Input Streams (configurable):
 - **spatial**: CBAM spatial attention only (learns *where* to focus)
 - **full**: CBAM channel + spatial attention (learns *what* features and *where*)
 - **arch**: Architecture-specific attention modifications
+
+**Global pooling types explained:**
+
+After the CLSTM processes the sequence, the final hidden state has shape `[B, C_hidden, H, W]`. GlobalPooling reduces the spatial dimensions to produce a fixed-size feature vector:
+- **avg**: Average pooling over spatial dimensions → `[B, C_hidden]`
+- **max**: Max pooling over spatial dimensions → `[B, C_hidden]`
+- **both**: Concatenates avg and max pooled features → `[B, 2*C_hidden]`
 
 #### ScalarLSTM (Time Series Processing)
 
