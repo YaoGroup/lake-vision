@@ -11,6 +11,8 @@ Usage:
 """
 import argparse
 import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -78,7 +80,8 @@ def main():
     if args.max_lakes is not None:
         tstack_files = tstack_files[:args.max_lakes]
 
-    print(f"Found {len(tstack_files)} tstack files to process")
+    total_files = len(tstack_files)
+    print(f"Found {total_files} tstack files to process")
     print(f"Output directory: {output_dir}")
     print()
 
@@ -91,13 +94,17 @@ def main():
     # Process each lake
     successful = 0
     failed = 0
+    start_time = time.time()
+    last_checkpoint = start_time
+
+    print(f"Starting processing at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+    sys.stdout.flush()
 
     for i, tstack_path in enumerate(tstack_files):
         # Extract lake_id from filename (e.g., tstack_CW2019_1579.nc -> CW2019_1579)
         lake_id = tstack_path.stem.replace("tstack_", "")
         output_path = output_dir / f"{lake_id}.nc"
-
-        print(f"[{i+1}/{len(tstack_files)}] Processing {lake_id}...")
 
         try:
             combine_lake_data(
@@ -112,12 +119,41 @@ def main():
             )
             successful += 1
         except Exception as e:
-            print(f"  ERROR: {e}")
+            print(f"  [{i+1}/{total_files}] ERROR processing {lake_id}: {e}")
             failed += 1
+            sys.stdout.flush()
+            continue
 
-    print()
-    print(f"Done! Processed {successful} lakes, {failed} failed")
+        # Print progress every 50 files or every 5 minutes
+        current_time = time.time()
+        if (i + 1) % 50 == 0 or (current_time - last_checkpoint) > 300:
+            elapsed = current_time - start_time
+            rate = (i + 1) / elapsed  # files per second
+            remaining = (total_files - i - 1) / rate if rate > 0 else 0
+
+            elapsed_str = str(timedelta(seconds=int(elapsed)))
+            remaining_str = str(timedelta(seconds=int(remaining)))
+
+            print(f"  [{i+1}/{total_files}] {lake_id} | "
+                  f"Elapsed: {elapsed_str} | "
+                  f"ETA: {remaining_str} | "
+                  f"Rate: {rate:.2f} files/sec | "
+                  f"Time: {datetime.now().strftime('%H:%M:%S')}")
+            sys.stdout.flush()
+            last_checkpoint = current_time
+
+    # Final summary
+    end_time = time.time()
+    total_elapsed = end_time - start_time
+    total_elapsed_str = str(timedelta(seconds=int(total_elapsed)))
+
+    print("=" * 60)
+    print(f"Completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Total time: {total_elapsed_str}")
+    print(f"Processed: {successful} successful, {failed} failed")
+    print(f"Average rate: {successful / total_elapsed:.2f} files/sec")
     print(f"Output saved to {output_dir}")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
