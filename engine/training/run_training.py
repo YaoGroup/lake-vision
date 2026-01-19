@@ -253,10 +253,14 @@ def train(config: dict):
 
     # Create model
     num_classes = config.get("num_classes", 4)
+    seq_len = config.get("seq_len", 153)
     model = LakeDrainageClassifier(
         use_imgseq=config.get("use_imgseq", True),
         use_areaseq=config.get("use_areaseq", True),
         use_cloudyseq=config.get("use_cloudyseq", False),
+        learn_area_weights=config.get("learn_area_weights", False),
+        learn_cloudy_weights=config.get("learn_cloudy_weights", False),
+        seq_len=seq_len,
         use_nir=config.get("use_nir", False),
         use_swir16=config.get("use_swir16", False),
         use_swir22=config.get("use_swir22", False),
@@ -448,6 +452,10 @@ def main():
                         help="Disable water area sequence")
     parser.add_argument("--use_cloudyseq", action="store_true", default=False,
                         help="Use cloudy sequence")
+    parser.add_argument("--learn_area_weights", action="store_true", default=False,
+                        help="Learn per-timestep weights for area_seq")
+    parser.add_argument("--learn_cloudy_weights", action="store_true", default=False,
+                        help="Learn per-timestep weights for cloudy_seq (requires --use_cloudyseq)")
     parser.add_argument("--use_nir", action="store_true", default=False,
                         help="Include NIR band")
     parser.add_argument("--use_swir16", action="store_true", default=False,

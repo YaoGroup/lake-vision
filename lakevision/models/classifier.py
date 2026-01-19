@@ -32,6 +32,13 @@ class LakeDrainageClassifier(nn.Module):
         use_imgseq              (bool): whether to use image sequence processing (default: True)
         use_areaseq             (bool): whether to use water area time series (default: True)
         use_cloudyseq           (bool): whether to use cloud coverage time series (default: False)
+        learn_area_weights      (bool): whether to learn per-timestep weights for area_seq (default: False)
+                                        When True, learns a [seq_len] vector of logits that are sigmoided
+                                        and multiplied with area_seq before processing.
+        learn_cloudy_weights    (bool): whether to learn per-timestep weights for cloudy_seq (default: False)
+                                        When True, learns a [seq_len] vector of logits that are sigmoided
+                                        and multiplied with cloudy_seq before processing.
+        seq_len                 (int): sequence length, required when learn_*_weights=True (default: 32)
         use_nir                 (bool): whether to include NIR band in imagery (default: False)
         use_swir16              (bool): whether to include SWIR16 band in imagery (default: False)
         use_swir22              (bool): whether to include SWIR22 band in imagery (default: False)
@@ -96,6 +103,9 @@ class LakeDrainageClassifier(nn.Module):
         use_imgseq=True,
         use_areaseq=True,
         use_cloudyseq=False,
+        learn_area_weights=False,
+        learn_cloudy_weights=False,
+        seq_len=32,
         # spectral band flags (beyond RGB)
         use_nir=False,
         use_swir16=False,
@@ -134,6 +144,9 @@ class LakeDrainageClassifier(nn.Module):
         self.use_imgseq = use_imgseq
         self.use_areaseq = use_areaseq
         self.use_cloudyseq = use_cloudyseq
+        self.learn_area_weights = learn_area_weights
+        self.learn_cloudy_weights = learn_cloudy_weights
+        self.seq_len = seq_len
         self.use_nir = use_nir
         self.use_swir16 = use_swir16
         self.use_swir22 = use_swir22
@@ -207,6 +220,11 @@ class LakeDrainageClassifier(nn.Module):
         # == SCALAR TIME SEQUENCE PROCESSING == #
         # separate LSTM for each scalar sequence
         if use_areaseq:
+            # Learnable per-timestep weights for area_seq
+            if learn_area_weights:
+                # Initialize to zeros so sigmoid gives 0.5 (neutral weighting)
+                self.area_logits = nn.Parameter(torch.zeros(seq_len))
+
             self.area_lstm = ScalarLSTM(
                 hidden_dim=slstm_hidden,
                 num_layers=slstm_num_layers,
@@ -214,6 +232,11 @@ class LakeDrainageClassifier(nn.Module):
             )
 
         if use_cloudyseq:
+            # Learnable per-timestep weights for cloudy_seq
+            if learn_cloudy_weights:
+                # Initialize to zeros so sigmoid gives 0.5 (neutral weighting)
+                self.cloudy_logits = nn.Parameter(torch.zeros(seq_len))
+
             self.cloudy_lstm = ScalarLSTM(
                 hidden_dim=slstm_hidden,
                 num_layers=slstm_num_layers,
@@ -294,12 +317,24 @@ class LakeDrainageClassifier(nn.Module):
         # == SCALAR TIME SEQUENCE PROCESSING == #
         # process lake area sequence
         if self.use_areaseq:
+            # Apply learned temporal weights if enabled
+            if self.learn_area_weights:
+                T = area_seq.shape[1]
+                area_weights = torch.sigmoid(self.area_logits[:T])  # [T]
+                area_seq = area_seq * area_weights.view(1, -1, 1)  # [B, T, 1]
+
             area_out = self.area_lstm(area_seq) # [B, T, slstm_hidden]
             area_features = area_out[:, -1, :]  # [B, slstm_hidden]
             features.append(area_features)
 
         # process cloudy sequence
         if self.use_cloudyseq:
+            # Apply learned temporal weights if enabled
+            if self.learn_cloudy_weights:
+                T = cloudy_seq.shape[1]
+                cloudy_weights = torch.sigmoid(self.cloudy_logits[:T])  # [T]
+                cloudy_seq = cloudy_seq * cloudy_weights.view(1, -1, 1)  # [B, T, 1]
+
             cloudy_out = self.cloudy_lstm(cloudy_seq) # [B, T, slstm_hidden]
             cloudy_features = cloudy_out[:, -1, :]  # [B, slstm_hidden]
             features.append(cloudy_features)
@@ -354,12 +389,27 @@ class LakeDrainageClassifier(nn.Module):
             spectral_bands.append('SWIR22')
         spectral_str = '+'.join(spectral_bands)
 
+        # Build area config string
+        area_str = f"areaseq={self.use_areaseq}"
+        if self.use_areaseq and self.learn_area_weights:
+            area_str += " (learned weights)"
+
+        # Build cloudy config string
+        cloudy_str = f"cloudyseq={self.use_cloudyseq}"
+        if self.use_cloudyseq and self.learn_cloudy_weights:
+            cloudy_str += " (learned weights)"
+
+        # Add seq_len if any learned weights are enabled
+        seq_len_str = ""
+        if (self.use_areaseq and self.learn_area_weights) or (self.use_cloudyseq and self.learn_cloudy_weights):
+            seq_len_str = f", seq_len={self.seq_len}"
+
         config_str = (
             f"LakeDrainageClassifier(\n"
             f"  Features: "
             f"imgseq={self.use_imgseq}, "
-            f"areaseq={self.use_areaseq}, "
-            f"cloudyseq={self.use_cloudyseq}\n"
+            f"{area_str}, "
+            f"{cloudy_str}{seq_len_str}\n"
             f"  Spectral bands: {spectral_str} ({self.n_imagery_channels} channels + mask)\n"
             f"  Attention: {self.attention_type}\n"
             f"  Feature dims: {feature_dims}\n"
