@@ -90,7 +90,8 @@ START_TIME=$(date +%s)
 
 # Training configuration
 # Adjust these hyperparameters as needed
-python3 "$REPO_DIR/engine/training/run_training.py" \
+# Use -u for unbuffered output so logs appear in real-time
+python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --labels_csv "$LABELS_CSV" \
     --nc_dir "$NC_DIR" \
     --id_col "new_id" \
