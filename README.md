@@ -215,7 +215,9 @@ After the CLSTM processes the sequence, the final hidden state has shape `[B, C_
 
 #### ScalarLSTM (Time Series Processing)
 
-Processes 1D scalar sequences (water area, cloud fraction) through standard LSTM layers. The model supports multiple input stream configurations:
+Processes 1D scalar sequences (water area, cloud fraction) through standard `nn.LSTM` layers. In **vector mode** (when `cnn_out_hw=(1,1)`), the image stream also uses this same LSTM architecture instead of ConvLSTM.
+
+The model supports multiple input stream configurations:
 
 | Configuration | Description |
 |---------------|-------------|
