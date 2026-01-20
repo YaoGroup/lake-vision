@@ -206,7 +206,7 @@ wandb sync wandb/offline-run-*
 | Lake NC files (preprocessed) | `/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_processed` |
 | Lake NC files (with cloudy_seq) | `/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_with_cloudyseq` |
 | Band statistics | `/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.json` |
-| Labels CSV | `/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW/labels_2019_volumes_CW.csv` |
+| Labels CSV | `/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW.csv` |
 | Sherlock workdir | `/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision` |
 | Saved models | `/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/models` |
 | Logs | `/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs` |

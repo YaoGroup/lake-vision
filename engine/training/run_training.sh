@@ -38,7 +38,7 @@ REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
 MODELS_DIR="$SHERLOCK_DIR/models"
 
 # Data paths
-LABELS_CSV="/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW/labels_2019_volumes_CW.csv"
+LABELS_CSV="/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW.csv"
 NC_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_with_cloudyseq"
 BAND_STATS="/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.json"
 
