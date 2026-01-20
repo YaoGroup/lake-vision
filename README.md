@@ -189,6 +189,9 @@ On Sherlock: `/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.
 **Vector mode**: When `cnn_out_hw=(1,1)`, the model uses a standard `nn.LSTM` (same architecture as ScalarLSTM) instead of ConvLSTM for temporal processing. The spatial dimensions are squeezed after FrontCNN, and the resulting `[B, T, C]` tensor is processed through a regular LSTM. This is ~3x more parameter efficient but removes spatial reasoning across time.
 
 #### CLSTM (Spatiotemporal Processing)
+
+Only used when `cnn_out_hw` > (1,1). In vector mode, the image stream uses a standard `nn.LSTM` instead.
+
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|
 | `clstm_hidden_dim` | 16, 32, 64 | 32 | Hidden state dimension |
