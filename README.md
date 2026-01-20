@@ -146,6 +146,30 @@ Where:
 | `use_swir16` | True/False | False | Include SWIR16 band in imagery |
 | `use_swir22` | True/False | False | Include SWIR22 band in imagery |
 
+#### Band Statistics (Normalization)
+
+When using multi-spectral bands, per-band mean/std normalization is recommended via the `band_stats` parameter in `LakeDataset`. This normalizes each band to zero mean and unit variance:
+
+```python
+dataset = LakeDataset(
+    data_paths="/path/to/nc/files",
+    band_stats="/path/to/band_stats.json",  # Per-band normalization
+    use_nir=True,
+    use_swir16=True,
+)
+```
+
+The `band_stats.json` file format:
+```json
+{
+    "red": {"mean": 1234.5, "std": 567.8},
+    "green": {"mean": 1100.2, "std": 498.3},
+    ...
+}
+```
+
+On Sherlock: `/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.json`
+
 #### Learned Temporal Weights
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|

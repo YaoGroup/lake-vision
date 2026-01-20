@@ -201,7 +201,8 @@ wandb sync wandb/offline-run-*
 | Resource | Path |
 |----------|------|
 | Repository | `/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision` |
-| Lake NC files | `/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_processed` |
+| Lake NC files (preprocessed) | `/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_processed` |
+| Lake NC files (with cloudy_seq) | `/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_with_cloudyseq` |
 | Band statistics | `/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.json` |
 | Labels CSV | `/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW/labels_2019_volumes_CW.csv` |
 | Sherlock workdir | `/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision` |
@@ -240,3 +241,4 @@ wandb sync wandb/offline-run-*
 - Added `band_stats` support for per-band normalization in `LakeDataset`
 - Consolidated all scripts under `engine/` directory (removed `scripts/`)
 - Added `learn_area_weights`, `learn_cloudy_weights`, and `seq_len` parameters to `LakeDrainageClassifier` for learnable per-timestep sequence weighting
+- Added progress tracking with timestamps and ETA to preprocessing script
