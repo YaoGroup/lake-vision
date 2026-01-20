@@ -183,14 +183,70 @@ def evaluate(model, loader, criterion, device, num_classes=4):
     return avg_loss, metrics
 
 
+def count_parameters(model):
+    """Count trainable and total parameters in a model."""
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    return trainable, total
+
+
 def train(config: dict):
     """Main training function."""
+    # Print header
+    print("\n" + "=" * 70)
+    print("LAKE-VISION TRAINING")
+    print("=" * 70)
+
+    # Seed and device
     seed = config.get("seed", 42)
     set_seed(seed)
-    print(f"Random seed: {seed}")
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+
+    # Print configuration summary
+    print("\n--- CONFIGURATION ---")
+    print(f"Random seed:    {seed}")
+    print(f"Device:         {device}")
+    if torch.cuda.is_available():
+        print(f"GPU:            {torch.cuda.get_device_name(0)}")
+        print(f"CUDA version:   {torch.version.cuda}")
+
+    print("\n--- DATA PATHS ---")
+    print(f"Labels CSV:     {config['labels_csv']}")
+    print(f"NC directory:   {config['nc_dir']}")
+    print(f"Band stats:     {config.get('band_stats', 'None')}")
+    print(f"Save path:      {config.get('save_path', 'None')}")
+
+    print("\n--- TRAINING HYPERPARAMETERS ---")
+    print(f"Epochs:         {config.get('epochs', 50)}")
+    print(f"Batch size:     {config.get('batch_size', 4)}")
+    print(f"Learning rate:  {config.get('lr', 1e-4)}")
+    print(f"Weight decay:   {config.get('weight_decay', 0.0)}")
+    print(f"Scheduler:      {config.get('use_scheduler', False)}")
+    print(f"Num workers:    {config.get('num_workers', 4)}")
+
+    print("\n--- INPUT STREAMS ---")
+    print(f"use_imgseq:     {config.get('use_imgseq', True)}")
+    print(f"use_areaseq:    {config.get('use_areaseq', True)}")
+    print(f"use_cloudyseq:  {config.get('use_cloudyseq', False)}")
+    print(f"cloudy_seq_var: {config.get('cloudy_seq_var', 'cloudy_seq_rgb')}")
+
+    print("\n--- SPECTRAL BANDS ---")
+    print(f"use_nir:        {config.get('use_nir', False)}")
+    print(f"use_swir16:     {config.get('use_swir16', False)}")
+    print(f"use_swir22:     {config.get('use_swir22', False)}")
+
+    print("\n--- MODEL ARCHITECTURE ---")
+    print(f"seq_len:              {config.get('seq_len', 153)}")
+    print(f"num_classes:          {config.get('num_classes', 4)}")
+    print(f"attention_type:       {config.get('attention_type', 'none')}")
+    print(f"frontcnn_base_ch:     {config.get('frontcnn_base_channels', 8)}")
+    print(f"frontcnn_num_layers:  {config.get('frontcnn_num_layers', 4)}")
+    print(f"clstm_hidden:         {config.get('clstm_hidden', 32)}")
+    print(f"slstm_hidden:         {config.get('slstm_hidden', 16)}")
+    print(f"classhead_hidden:     {config.get('classhead_hidden', 64)}")
+    print(f"classhead_dropout:    {config.get('classhead_dropout', 0.0)}")
+    print(f"learn_area_weights:   {config.get('learn_area_weights', False)}")
+    print(f"learn_cloudy_weights: {config.get('learn_cloudy_weights', False)}")
 
     # Create data splits
     train_ids, val_ids, test_ids = create_splits(
@@ -278,7 +334,13 @@ def train(config: dict):
         pool_type=config.get("pool_type", "avg"),
     ).to(device)
 
+    # Print model summary
+    trainable_params, total_params = count_parameters(model)
+    print("\n--- MODEL SUMMARY ---")
     print(model)
+    print(f"\nTrainable parameters: {trainable_params:,}")
+    print(f"Total parameters:     {total_params:,}")
+    print("=" * 70)
 
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -347,6 +409,19 @@ def train(config: dict):
             f"Time: {epoch_time:.1f}s | ETA: {eta_str}"
         )
 
+        # Print confusion matrix every 10 epochs (and first epoch)
+        if (epoch + 1) == 1 or (epoch + 1) % 10 == 0:
+            cm = val_metrics['confusion_matrix']
+            print(f"\n  Validation Confusion Matrix (epoch {epoch+1}):")
+            print(f"  Classes: {CLASS_NAMES[:num_classes]}")
+            print(f"  (rows=true, cols=pred)")
+            for i, row in enumerate(cm):
+                print(f"    {CLASS_NAMES[i]}: {row}")
+            # Also print per-class F1 scores
+            f1_str = " | ".join([f"{CLASS_NAMES[i]}:{val_metrics[f'f1_{CLASS_NAMES[i]}']:.3f}"
+                                 for i in range(num_classes)])
+            print(f"  Per-class F1: {f1_str}\n")
+
         if WANDB_AVAILABLE and wandb.run is not None:
             wandb.log(log_dict)
 
@@ -391,8 +466,19 @@ def train(config: dict):
     print(f"\nPer-class F1:")
     for class_name in CLASS_NAMES[:num_classes]:
         print(f"  {class_name}: {test_metrics[f'f1_{class_name}']:.4f}")
-    print(f"\nConfusion Matrix:")
+    print(f"\nConfusion Matrix (rows=true, cols=pred):")
+    print(f"Classes: {CLASS_NAMES[:num_classes]}")
     print(test_metrics['confusion_matrix'])
+
+    # Print final save path confirmation
+    if config.get("save_path"):
+        save_path = Path(config["save_path"])
+        if save_path.exists():
+            file_size_mb = save_path.stat().st_size / (1024 * 1024)
+            print(f"\nModel saved to: {save_path}")
+            print(f"Model file size: {file_size_mb:.2f} MB")
+        else:
+            print(f"\nWARNING: Expected model file not found at: {save_path}")
 
     if WANDB_AVAILABLE and wandb.run is not None:
         wandb.log({
