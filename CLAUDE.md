@@ -118,6 +118,7 @@ Channel order in NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 
 | | `out_hw` | (64,64) | Spatial resolution for ConvLSTM |
 | **ConvLSTM** | `hidden` | 32 | Temporal feature extraction |
 | | `kernel` | 3 | Must be odd |
+| **FrontCNN** | `out_hw` | (64,64) | Output spatial dims. If (1,1), uses regular LSTM instead of ConvLSTM |
 | **ScalarLSTM** | `hidden` | 16 | For area/cloudy sequences |
 | | `num_layers` | 1 | Single layer sufficient |
 | **ClassHead** | `hidden` | 64 | MLP hidden dimension |
@@ -135,6 +136,7 @@ Future experiments to try:
 - Multi-spectral: `--use_nir`, `--use_swir16`
 - Cloudy sequence: `--use_cloudyseq`
 - Learned area weights: `--learn_area_weights`
+- Vector mode (no spatial reasoning): `--frontcnn_out_hw 1 1` - uses regular LSTM, ~3x fewer parameters
 - Learned cloudy weights: `--use_cloudyseq --learn_cloudy_weights`
 
 ## Data Format

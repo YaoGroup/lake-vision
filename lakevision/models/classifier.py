@@ -54,6 +54,8 @@ class LakeDrainageClassifier(nn.Module):
         frontcnn_base_channels  (int) base channels for FrontCNN (default: 8)
         frontcnn_num_layers     (int): number of layers in frontcnn (default: 4)
         frontcnn_out_hw         (tuple): output spatial dimensions after FrontCNN (default: (64,64))
+                                        If set to (1,1), uses regular LSTM instead of ConvLSTM
+                                        (vector mode - more parameter efficient, no spatial reasoning)
         frontcnn_pool           (str): pooling type for FrontCNN ('max, 'avg', 'none') (default: 'max')
         clstm_hidden            (int): hidden channels for CLSTM (default: 32)
         clstm_kernel            (int): kernel size for CLSTM (default: 3)
@@ -170,6 +172,13 @@ class LakeDrainageClassifier(nn.Module):
 
         # == IMAGE SEQUENCE PROCESSING == #
         if use_imgseq:
+            # Store frontcnn_out_hw for forward pass logic
+            self.frontcnn_out_hw = frontcnn_out_hw
+
+            # Determine if we're using vector mode (1x1 output -> regular LSTM)
+            # or spatial mode (larger output -> ConvLSTM)
+            self.use_vector_lstm = (frontcnn_out_hw == (1, 1))
+
             # (1) FrontCNN for imagery (RGB + optional spectral bands)
             self.frontcnn_rgb = FrontCNN(
                 in_channels=self.n_imagery_channels,
@@ -180,8 +189,11 @@ class LakeDrainageClassifier(nn.Module):
             )
             frontcnn_out_channels = self.frontcnn_rgb.output_channels
 
-            # (2) APPLY ATTENTION
-            if self.attention_type == 'spatial':
+            # (2) APPLY ATTENTION (only for spatial mode)
+            if self.use_vector_lstm:
+                # No attention for vector mode (no spatial dimensions to attend to)
+                self.attention = nn.Identity()
+            elif self.attention_type == 'spatial':
                 # spatial attention only
                 self.attention = SpatialCBAM(
                     in_channels=frontcnn_out_channels,
@@ -206,16 +218,28 @@ class LakeDrainageClassifier(nn.Module):
             else: # no attention
                 self.attention = nn.Identity()
 
-            # (3) CLSTM
-            self.clstm = CLSTM(
-                input_channels=frontcnn_out_channels,
-                hidden_channels=clstm_hidden,
-                kernel_size=clstm_kernel,
-                return_sequence=True,
-            )
-
-            # (4) GLOBAL POOLING
-            self.global_pool = GlobalPooling(pool_type=pool_type)
+            # (3) Temporal processing: ConvLSTM for spatial, regular LSTM for vectors
+            if self.use_vector_lstm:
+                # Vector mode: use regular LSTM
+                # Input will be [B, T, frontcnn_out_channels] after squeezing spatial dims
+                self.img_lstm = nn.LSTM(
+                    input_size=frontcnn_out_channels,
+                    hidden_size=clstm_hidden,
+                    num_layers=1,
+                    batch_first=True,
+                )
+                # Store hidden size for classifier input calculation
+                self.img_lstm_hidden = clstm_hidden
+            else:
+                # Spatial mode: use ConvLSTM
+                self.clstm = CLSTM(
+                    input_channels=frontcnn_out_channels,
+                    hidden_channels=clstm_hidden,
+                    kernel_size=clstm_kernel,
+                    return_sequence=True,
+                )
+                # (4) GLOBAL POOLING (only needed for spatial mode)
+                self.global_pool = GlobalPooling(pool_type=pool_type)
 
         # == SCALAR TIME SEQUENCE PROCESSING == #
         # separate LSTM for each scalar sequence
@@ -296,21 +320,34 @@ class LakeDrainageClassifier(nn.Module):
             # process imagery through FrontCNN
             rgb_features = self.frontcnn_rgb(imagery)   # [B, T, C, Hf, Wf]
 
-            # apply attention
-            if self.attention_type == 'arch':
-                # architectural attention fusion between separate mask pathway and RGB pathway
-                mask_features = self.frontcnn_mask(mask)
-                img_features = rgb_features * mask_features
-            else:
-                # learned attention (CBAM) or no attention
-                img_features = self.attention(rgb_features)
-            
-            # CLSTM processing
-            lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
+            if self.use_vector_lstm:
+                # Vector mode: squeeze spatial dims and use regular LSTM
+                # rgb_features is [B, T, C, 1, 1] -> squeeze to [B, T, C]
+                B, T, C, _, _ = rgb_features.shape
+                rgb_features = rgb_features.squeeze(-1).squeeze(-1)  # [B, T, C]
 
-            # aggregate by taking last timestep and global pooling
-            last_hidden = lstm_out[:, -1, :, :, :]   # [B, C_hidden, Hf, Wf]
-            img_features = self.global_pool(last_hidden.unsqueeze(1)).squeeze(1)  # [B, C_hidden] or [B, 2*C_hidden]
+                # Process through regular LSTM
+                lstm_out, _ = self.img_lstm(rgb_features)  # [B, T, hidden]
+
+                # Take last timestep
+                img_features = lstm_out[:, -1, :]  # [B, hidden]
+            else:
+                # Spatial mode: use ConvLSTM with global pooling
+                # apply attention
+                if self.attention_type == 'arch':
+                    # architectural attention fusion between separate mask pathway and RGB pathway
+                    mask_features = self.frontcnn_mask(mask)
+                    img_features = rgb_features * mask_features
+                else:
+                    # learned attention (CBAM) or no attention
+                    img_features = self.attention(rgb_features)
+
+                # CLSTM processing
+                lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
+
+                # aggregate by taking last timestep and global pooling
+                last_hidden = lstm_out[:, -1, :, :, :]   # [B, C_hidden, Hf, Wf]
+                img_features = self.global_pool(last_hidden.unsqueeze(1)).squeeze(1)  # [B, C_hidden] or [B, 2*C_hidden]
 
             features.append(img_features)
 
@@ -351,28 +388,31 @@ class LakeDrainageClassifier(nn.Module):
     def get_feature_dims(self):
         """
         Get the dimensions of features from each component.
-        
+
         Useful for debugging and understanding model architecture.
-        
+
         Returns:
             dict: Feature dimensions for each component
         """
         dims = {}
-        
+
         if self.use_imgseq:
-            if self.pool_type == 'both':
+            if self.use_vector_lstm:
+                # Vector mode uses regular LSTM
+                dims['img_features'] = self.img_lstm_hidden
+            elif self.pool_type == 'both':
                 dims['img_features'] = self.clstm.hidden_channels * 2
             else:
                 dims['img_features'] = self.clstm.hidden_channels
-        
+
         if self.use_areaseq:
             dims['area_features'] = self.area_lstm.lstm.hidden_size
-        
+
         if self.use_cloudyseq:
             dims['cloudy_features'] = self.cloudy_lstm.lstm.hidden_size
-        
+
         dims['total'] = sum(dims.values())
-        
+
         return dims
     
     def __repr__(self):
@@ -404,6 +444,15 @@ class LakeDrainageClassifier(nn.Module):
         if (self.use_areaseq and self.learn_area_weights) or (self.use_cloudyseq and self.learn_cloudy_weights):
             seq_len_str = f", seq_len={self.seq_len}"
 
+        # Build temporal processing string
+        if self.use_imgseq:
+            if self.use_vector_lstm:
+                temporal_str = "LSTM (vector mode, 1x1 spatial)"
+            else:
+                temporal_str = f"ConvLSTM (spatial mode, {self.frontcnn_out_hw[0]}x{self.frontcnn_out_hw[1]})"
+        else:
+            temporal_str = "N/A (no imgseq)"
+
         config_str = (
             f"LakeDrainageClassifier(\n"
             f"  Features: "
@@ -411,6 +460,7 @@ class LakeDrainageClassifier(nn.Module):
             f"{area_str}, "
             f"{cloudy_str}{seq_len_str}\n"
             f"  Spectral bands: {spectral_str} ({self.n_imagery_channels} channels + mask)\n"
+            f"  Temporal processing: {temporal_str}\n"
             f"  Attention: {self.attention_type}\n"
             f"  Feature dims: {feature_dims}\n"
             f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}\n"

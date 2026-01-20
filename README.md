@@ -183,8 +183,10 @@ On Sherlock: `/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.
 |-----------|---------|---------|-------------|
 | `cnn_base_channels` | 8, 16, 32 | 8 | Base channel count (doubles each layer) |
 | `cnn_num_layers` | 2, 3, 4 | 3 | Number of conv layers |
-| `cnn_out_hw` | (8,8), (16,16), (32,32) | (32,32) | Output spatial dimensions |
+| `cnn_out_hw` | (1,1), (8,8), (16,16), (32,32), (64,64) | (64,64) | Output spatial dimensions |
 | `cnn_pool` | 'max', 'avg' | 'max' | Pooling type |
+
+**Vector mode**: When `cnn_out_hw=(1,1)`, the model uses a regular LSTM instead of ConvLSTM for temporal processing. This is ~3x more parameter efficient but removes spatial reasoning across time. Each frame is encoded to a single feature vector before temporal processing.
 
 #### CLSTM (Spatiotemporal Processing)
 | Parameter | Options | Default | Description |
