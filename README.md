@@ -222,7 +222,7 @@ The model supports multiple input stream configurations:
 | Configuration | Description |
 |---------------|-------------|
 | `use_imgseq=True, use_areaseq=True` | Full model: imagery + area sequences (default) |
-| `use_imgseq=True, use_areaseq=False` | Imagery only: spatial-temporal features |
+| `use_imgseq=True, use_areaseq=False` | Imagery only: spatial-temporal features when cnn_out_hw=(1,1) |
 | `use_imgseq=False, use_areaseq=True` | Area only: lightweight baseline using just water area time series |
 | `use_imgseq=True, use_areaseq=True, use_cloudyseq=True` | All streams: adds cloud fraction |
 
