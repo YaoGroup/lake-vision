@@ -176,7 +176,7 @@ On Sherlock: `/oak/stanford/groups/cyaolai/JoshRines/data/cloudytile/band_stats.
 |-----------|---------|---------|-------------|
 | `learn_area_weights` | True/False | False | Learn per-timestep weights for area sequence |
 | `learn_cloudy_weights` | True/False | False | Learn per-timestep weights for cloudy sequence |
-| `seq_len` | 32, 153, ... | 32 | Sequence length (needed when learn_*_weights=True) |
+| `seq_len` | 32, 153, ... | 153 | Sequence length (needed when learn_*_weights=True) |
 
 #### FrontCNN (Image Feature Extraction)
 | Parameter | Options | Default | Description |

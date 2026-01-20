@@ -38,7 +38,7 @@ class LakeDrainageClassifier(nn.Module):
         learn_cloudy_weights    (bool): whether to learn per-timestep weights for cloudy_seq (default: False)
                                         When True, learns a [seq_len] vector of logits that are sigmoided
                                         and multiplied with cloudy_seq before processing.
-        seq_len                 (int): sequence length, required when learn_*_weights=True (default: 32)
+        seq_len                 (int): sequence length, required when learn_*_weights=True (default: 153)
         use_nir                 (bool): whether to include NIR band in imagery (default: False)
         use_swir16              (bool): whether to include SWIR16 band in imagery (default: False)
         use_swir22              (bool): whether to include SWIR22 band in imagery (default: False)
@@ -105,7 +105,7 @@ class LakeDrainageClassifier(nn.Module):
         use_cloudyseq=False,
         learn_area_weights=False,
         learn_cloudy_weights=False,
-        seq_len=32,
+        seq_len=153,
         # spectral band flags (beyond RGB)
         use_nir=False,
         use_swir16=False,

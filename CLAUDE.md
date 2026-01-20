@@ -126,7 +126,7 @@ Channel order in NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 
 | | `use_cloudyseq` | False | Start simple, add later |
 | | `learn_area_weights` | False | Learn per-timestep weights for area_seq |
 | | `learn_cloudy_weights` | False | Learn per-timestep weights for cloudy_seq |
-| | `seq_len` | 32 | Sequence length (required when learn_*_weights=True) |
+| | `seq_len` | 153 | Sequence length (required when learn_*_weights=True) |
 | **Attention** | `type` | none | Start simple, add later |
 
 Future experiments to try:
