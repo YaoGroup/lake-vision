@@ -20,11 +20,11 @@ The data preprocessing pipeline combines multi-source lake data into standardize
 ### Data Sources
 
 - **Imagery timestacks**: Sentinel-2 satellite imagery sequences (`lakevision/data/samples/imgseqs/`)
-  - Format: `.nc` files with reflectance bands (red, green, blue, mask/SCL)
+  - Format: `.nc` files with reflectance bands (red, green, blue, nir, swir16, swir22, mask)
   - Temporal resolution: ~153 observations per lake (May-September 2019)
   - Spatial resolution: 512×512 pixels at 10m/pixel
 
-- **Area sequences**: Lake water area time series (`lakevision/data/samples/areaseqs/`)
+- **Area sequences**: Lake water area time series from [Dunmire et al. 2025](https://zenodo.org/records/14587026)
   - Format: Single `.nc` file with daily water area measurements
   - Variables: `S2_water` (Sentinel-2 derived water area)
   - Temporal coverage: Full year 2019
@@ -105,8 +105,9 @@ ds = combine_lake_data(
     output_path='lakevision/data/samples/processed/CW2019_1579.nc'
 )
 
-print(ds['imagery'].shape)    # (153, 7, 512, 512)
-print(ds['water_area'].shape) # (153,)
+print(ds['imagery'].shape)      # (153, 7, 512, 512)
+print(ds['water_area'].shape)   # (153,)
+print(ds['cloudy_seq_rgb'].shape)  # (153,) - tile usefulness from cloudy-tile model
 ```
 
 ## Model Architecture
