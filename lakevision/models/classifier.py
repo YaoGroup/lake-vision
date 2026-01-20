@@ -180,14 +180,14 @@ class LakeDrainageClassifier(nn.Module):
             self.use_vector_lstm = (frontcnn_out_hw == (1, 1))
 
             # (1) FrontCNN for imagery (RGB + optional spectral bands)
-            self.frontcnn_rgb = FrontCNN(
+            self.frontcnn = FrontCNN(
                 in_channels=self.n_imagery_channels,
                 base_channels=frontcnn_base_channels,
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
                 pool=frontcnn_pool,
             )
-            frontcnn_out_channels = self.frontcnn_rgb.output_channels
+            frontcnn_out_channels = self.frontcnn.output_channels
 
             # (2) APPLY ATTENTION (only for spatial mode)
             if self.use_vector_lstm:
@@ -318,16 +318,16 @@ class LakeDrainageClassifier(nn.Module):
             mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
 
             # process imagery through FrontCNN
-            rgb_features = self.frontcnn_rgb(imagery)   # [B, T, C, Hf, Wf]
+            img_features = self.frontcnn(imagery)   # [B, T, C, Hf, Wf]
 
             if self.use_vector_lstm:
                 # Vector mode: squeeze spatial dims and use regular LSTM
-                # rgb_features is [B, T, C, 1, 1] -> squeeze to [B, T, C]
-                B, T, C, _, _ = rgb_features.shape
-                rgb_features = rgb_features.squeeze(-1).squeeze(-1)  # [B, T, C]
+                # img_features is [B, T, C, 1, 1] -> squeeze to [B, T, C]
+                B, T, C, _, _ = img_features.shape
+                img_features = img_features.squeeze(-1).squeeze(-1)  # [B, T, C]
 
                 # Process through regular LSTM
-                lstm_out, _ = self.img_lstm(rgb_features)  # [B, T, hidden]
+                lstm_out, _ = self.img_lstm(img_features)  # [B, T, hidden]
 
                 # Take last timestep
                 img_features = lstm_out[:, -1, :]  # [B, hidden]
@@ -335,12 +335,12 @@ class LakeDrainageClassifier(nn.Module):
                 # Spatial mode: use ConvLSTM with global pooling
                 # apply attention
                 if self.attention_type == 'arch':
-                    # architectural attention fusion between separate mask pathway and RGB pathway
+                    # architectural attention fusion between separate mask pathway and imagery pathway
                     mask_features = self.frontcnn_mask(mask)
-                    img_features = rgb_features * mask_features
+                    img_features = img_features * mask_features
                 else:
                     # learned attention (CBAM) or no attention
-                    img_features = self.attention(rgb_features)
+                    img_features = self.attention(img_features)
 
                 # CLSTM processing
                 lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
