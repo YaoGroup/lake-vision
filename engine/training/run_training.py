@@ -107,11 +107,14 @@ def create_splits(
     return train_ids, val_ids, test_ids
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device):
-    """Train for one epoch."""
+def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4):
+    """Train for one epoch and return loss + metrics."""
     model.train()
     total_loss = 0.0
     n_batches = 0
+
+    all_preds = []
+    all_labels = []
 
     for batch in loader:
         img_seq, area_seq, cloudy_seq, labels, _ = batch
@@ -130,7 +133,30 @@ def train_one_epoch(model, loader, optimizer, criterion, device):
         total_loss += loss.item()
         n_batches += 1
 
-    return total_loss / n_batches
+        # Collect predictions for metrics
+        preds = torch.argmax(logits, dim=1)
+        all_preds.extend(preds.detach().cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+
+    avg_loss = total_loss / n_batches
+
+    # Calculate metrics
+    metrics = {
+        'accuracy': accuracy_score(all_labels, all_preds),
+        'precision_macro': precision_score(all_labels, all_preds, average='macro', zero_division=0),
+        'recall_macro': recall_score(all_labels, all_preds, average='macro', zero_division=0),
+        'f1_macro': f1_score(all_labels, all_preds, average='macro', zero_division=0),
+    }
+
+    # Per-class metrics
+    for i, class_name in enumerate(CLASS_NAMES[:num_classes]):
+        binary_labels = [1 if l == i else 0 for l in all_labels]
+        binary_preds = [1 if p == i else 0 for p in all_preds]
+        metrics[f'precision_{class_name}'] = precision_score(binary_labels, binary_preds, zero_division=0)
+        metrics[f'recall_{class_name}'] = recall_score(binary_labels, binary_preds, zero_division=0)
+        metrics[f'f1_{class_name}'] = f1_score(binary_labels, binary_preds, zero_division=0)
+
+    return avg_loss, metrics
 
 
 def evaluate(model, loader, criterion, device, num_classes=4):
@@ -369,7 +395,7 @@ def train(config: dict):
     for epoch in range(epochs):
         epoch_start_time = time.time()
 
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes)
         val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes)
 
         epoch_time = time.time() - epoch_start_time
@@ -382,6 +408,10 @@ def train(config: dict):
         log_dict = {
             "epoch": epoch + 1,
             "train_loss": train_loss,
+            "train_acc": train_metrics["accuracy"],
+            "train_precision_macro": train_metrics["precision_macro"],
+            "train_recall_macro": train_metrics["recall_macro"],
+            "train_f1_macro": train_metrics["f1_macro"],
             "val_loss": val_loss,
             "val_acc": val_metrics["accuracy"],
             "val_precision_macro": val_metrics["precision_macro"],
@@ -393,6 +423,7 @@ def train(config: dict):
 
         # Per-class metrics
         for class_name in CLASS_NAMES[:num_classes]:
+            log_dict[f"train_f1_{class_name}"] = train_metrics[f"f1_{class_name}"]
             log_dict[f"val_f1_{class_name}"] = val_metrics[f"f1_{class_name}"]
 
         # Calculate estimated time remaining
@@ -401,15 +432,13 @@ def train(config: dict):
         eta_seconds = avg_epoch_time * remaining_epochs
         eta_str = f"{int(eta_seconds // 3600)}h {int((eta_seconds % 3600) // 60)}m"
 
-        print(
-            f"Epoch {epoch+1}/{epochs} | "
-            f"Loss: {train_loss:.4f}/{val_loss:.4f} | "
-            f"Acc: {val_metrics['accuracy']:.3f} | "
-            f"F1: {val_metrics['f1_macro']:.3f} | "
-            f"Time: {epoch_time:.1f}s | ETA: {eta_str}"
-        )
+        # Print epoch summary
+        print(f"\nEpoch {epoch+1}/{epochs} | Time: {epoch_time:.1f}s | ETA: {eta_str}")
+        print(f"  {'':12} {'Loss':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8}")
+        print(f"  {'Train':12} {train_loss:>8.4f} {train_metrics['accuracy']:>8.3f} {train_metrics['precision_macro']:>8.3f} {train_metrics['recall_macro']:>8.3f} {train_metrics['f1_macro']:>8.3f}")
+        print(f"  {'Val':12} {val_loss:>8.4f} {val_metrics['accuracy']:>8.3f} {val_metrics['precision_macro']:>8.3f} {val_metrics['recall_macro']:>8.3f} {val_metrics['f1_macro']:>8.3f}")
 
-        # Print confusion matrix every 10 epochs (and first epoch)
+        # Print confusion matrix and per-class metrics every 10 epochs (and first epoch)
         if (epoch + 1) == 1 or (epoch + 1) % 10 == 0:
             cm = val_metrics['confusion_matrix']
             print(f"\n  Validation Confusion Matrix (epoch {epoch+1}):")
@@ -417,10 +446,11 @@ def train(config: dict):
             print(f"  (rows=true, cols=pred)")
             for i, row in enumerate(cm):
                 print(f"    {CLASS_NAMES[i]}: {row}")
-            # Also print per-class F1 scores
-            f1_str = " | ".join([f"{CLASS_NAMES[i]}:{val_metrics[f'f1_{CLASS_NAMES[i]}']:.3f}"
-                                 for i in range(num_classes)])
-            print(f"  Per-class F1: {f1_str}\n")
+            # Per-class metrics table
+            print(f"\n  Per-class metrics:")
+            print(f"  {'Class':8} {'Prec':>8} {'Recall':>8} {'F1':>8}")
+            for i, class_name in enumerate(CLASS_NAMES[:num_classes]):
+                print(f"  {class_name:8} {val_metrics[f'precision_{class_name}']:>8.3f} {val_metrics[f'recall_{class_name}']:>8.3f} {val_metrics[f'f1_{class_name}']:>8.3f}")
 
         if WANDB_AVAILABLE and wandb.run is not None:
             wandb.log(log_dict)
