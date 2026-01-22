@@ -10,6 +10,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64GB
 #SBATCH -C GPU_SKU:A100_SXM4
+#SBATCH -C GPU_MEM:80GB
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
 #SBATCH --array=0-1
