@@ -6,6 +6,7 @@ from satellite imagery sequences and scalar time series data.
 """
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from .blocks import FrontCNN, ScalarLSTM, ClassHeadMLP, GlobalPooling
 from .clstm import CLSTM
@@ -67,6 +68,8 @@ class LakeDrainageClassifier(nn.Module):
         attention_reduction     (int): channel reduction ratio for full CBAM (default: 16)
         attention_kernel        (int): kernel size for spatial attention (default: 7)
         pool_type               (str): pooling type before classification head ('max', 'avg') (default: 'avg')
+        gradient_checkpointing  (bool): whether to use gradient checkpointing to reduce memory (default: False)
+                                        Trades compute for memory by recomputing activations during backward pass.
 
     Input:
         x: [B, T, C, H, W] tensor of image sequences
@@ -138,7 +141,9 @@ class LakeDrainageClassifier(nn.Module):
         attention_reduction=16,
         attention_kernel=7,
         # pooling before classification head mlp
-        pool_type='avg'
+        pool_type='avg',
+        # memory optimization
+        gradient_checkpointing=False,
     ):
         super(LakeDrainageClassifier, self).__init__()
 
@@ -154,6 +159,7 @@ class LakeDrainageClassifier(nn.Module):
         self.use_swir22 = use_swir22
         self.attention_type = attention_type.lower()
         self.pool_type = pool_type
+        self.gradient_checkpointing = gradient_checkpointing
 
         # Calculate number of imagery channels (RGB + optional spectral bands)
         # Mask is handled separately in the forward pass
@@ -318,7 +324,10 @@ class LakeDrainageClassifier(nn.Module):
             mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
 
             # process imagery through FrontCNN
-            img_features = self.frontcnn(imagery)   # [B, T, C, Hf, Wf]
+            if self.gradient_checkpointing and self.training:
+                img_features = checkpoint(self.frontcnn, imagery, use_reentrant=False)
+            else:
+                img_features = self.frontcnn(imagery)   # [B, T, C, Hf, Wf]
 
             if self.use_vector_lstm:
                 # Vector mode: squeeze spatial dims and use regular LSTM
@@ -336,14 +345,23 @@ class LakeDrainageClassifier(nn.Module):
                 # apply attention
                 if self.attention_type == 'arch':
                     # architectural attention fusion between separate mask pathway and imagery pathway
-                    mask_features = self.frontcnn_mask(mask)
+                    if self.gradient_checkpointing and self.training:
+                        mask_features = checkpoint(self.frontcnn_mask, mask, use_reentrant=False)
+                    else:
+                        mask_features = self.frontcnn_mask(mask)
                     img_features = img_features * mask_features
                 else:
                     # learned attention (CBAM) or no attention
-                    img_features = self.attention(img_features)
+                    if self.gradient_checkpointing and self.training:
+                        img_features = checkpoint(self.attention, img_features, use_reentrant=False)
+                    else:
+                        img_features = self.attention(img_features)
 
                 # CLSTM processing
-                lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
+                if self.gradient_checkpointing and self.training:
+                    lstm_out = checkpoint(self.clstm, img_features, use_reentrant=False)
+                else:
+                    lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
 
                 # aggregate by taking last timestep and global pooling
                 last_hidden = lstm_out[:, -1, :, :, :]   # [B, C_hidden, Hf, Wf]

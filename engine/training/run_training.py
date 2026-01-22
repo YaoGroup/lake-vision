@@ -107,8 +107,13 @@ def create_splits(
     return train_ids, val_ids, test_ids
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4):
-    """Train for one epoch and return loss + metrics."""
+def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4, accumulation_steps=1):
+    """Train for one epoch and return loss + metrics.
+
+    Args:
+        accumulation_steps: Number of mini-batches to accumulate gradients over.
+                           Effective batch size = batch_size * accumulation_steps.
+    """
     model.train()
     total_loss = 0.0
     n_batches = 0
@@ -116,7 +121,9 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4):
     all_preds = []
     all_labels = []
 
-    for batch in loader:
+    optimizer.zero_grad()  # Zero gradients once at start
+
+    for batch_idx, batch in enumerate(loader):
         img_seq, area_seq, cloudy_seq, labels, _ = batch
 
         img_seq = img_seq.to(device)
@@ -124,19 +131,30 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4):
         cloudy_seq = cloudy_seq.to(device)
         labels = labels.to(device)
 
-        optimizer.zero_grad()
         logits = model(img_seq, area_seq, cloudy_seq)
         loss = criterion(logits, labels)
-        loss.backward()
-        optimizer.step()
 
-        total_loss += loss.item()
+        # Scale loss by accumulation steps to maintain proper gradient magnitude
+        loss = loss / accumulation_steps
+        loss.backward()
+
+        # Step optimizer every accumulation_steps batches
+        if (batch_idx + 1) % accumulation_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+
+        total_loss += loss.item() * accumulation_steps  # Unscale for logging
         n_batches += 1
 
         # Collect predictions for metrics
         preds = torch.argmax(logits, dim=1)
         all_preds.extend(preds.detach().cpu().numpy())
         all_labels.extend(labels.cpu().numpy())
+
+    # Handle remaining gradients if batches not divisible by accumulation_steps
+    if n_batches % accumulation_steps != 0:
+        optimizer.step()
+        optimizer.zero_grad()
 
     avg_loss = total_loss / n_batches
 
@@ -273,6 +291,8 @@ def train(config: dict):
     print(f"classhead_dropout:    {config.get('classhead_dropout', 0.0)}")
     print(f"learn_area_weights:   {config.get('learn_area_weights', False)}")
     print(f"learn_cloudy_weights: {config.get('learn_cloudy_weights', False)}")
+    print(f"grad_checkpointing:   {config.get('gradient_checkpointing', False)}")
+    print(f"accumulation_steps:   {config.get('accumulation_steps', 1)}")
 
     # Create data splits
     train_ids, val_ids, test_ids = create_splits(
@@ -358,6 +378,7 @@ def train(config: dict):
         classhead_hidden=config.get("classhead_hidden", 64),
         classhead_dropout=config.get("classhead_dropout", 0.0),
         pool_type=config.get("pool_type", "avg"),
+        gradient_checkpointing=config.get("gradient_checkpointing", False),
     ).to(device)
 
     # Print model summary
@@ -395,7 +416,8 @@ def train(config: dict):
     for epoch in range(epochs):
         epoch_start_time = time.time()
 
-        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes)
+        accumulation_steps = config.get("accumulation_steps", 1)
+        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps)
         val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes)
 
         epoch_time = time.time() - epoch_start_time
@@ -591,6 +613,12 @@ def main():
     parser.add_argument("--slstm_hidden", type=int, default=16)
     parser.add_argument("--classhead_hidden", type=int, default=64)
     parser.add_argument("--classhead_dropout", type=float, default=0.0)
+
+    # Memory optimization
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=False,
+                        help="Use gradient checkpointing to reduce GPU memory (trades compute for memory)")
+    parser.add_argument("--accumulation_steps", type=int, default=1,
+                        help="Gradient accumulation steps (effective batch = batch_size * accumulation_steps)")
 
     # Output
     parser.add_argument("--save_path", type=str, default=None,

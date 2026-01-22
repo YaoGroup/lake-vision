@@ -130,6 +130,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --slstm_hidden 32 \
     --classhead_hidden 128 \
     --classhead_dropout 0.4 \
+    --gradient_checkpointing \
     --save_path "$SAVE_PATH" \
     --num_workers 4 \
     --seed 42
