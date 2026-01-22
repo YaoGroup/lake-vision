@@ -120,6 +120,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --cloudy_seq_var "cloudy_seq_rgb" \
     --use_imgseq \
     --use_areaseq \
+    --use_cloudyseq \
     --attention_type "$ATTENTION_TYPE" \
     --num_classes 4 \
     --frontcnn_base_channels 16 \
