@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=lv_ablation
+#SBATCH --job-name=lv_highcap
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%A_%a.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%A_%a.err
-#SBATCH --time=48:00:00
+#SBATCH --time=120:00:00
 #SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -12,29 +12,33 @@
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
-#SBATCH --array=0-5
+#SBATCH --array=0-1
 
 # =============================================================================
-# ABLATION STUDY: INPUT STREAM COMBINATIONS
+# HIGH-CAPACITY MODEL: 200 EPOCHS - ATTENTION COMPARISON
 # =============================================================================
 #
-# Runs 6 experiments with different input combinations:
-#   0: area_seq only (no imagery)
-#   1: imagery only (no area_seq)
-#   2: imagery + area_seq
-#   3: imagery + area_seq + cloudy_seq_rgb
-#   4: imagery + area_seq + cloudy_seq_rgbn
-#   5: imagery + area_seq + cloudy_seq_bns16
+# Runs 2 experiments with different attention mechanisms:
+#   0: Full CBAM attention (channel + spatial)
+#   1: Architectural attention (mask pathway)
+#
+# Larger model with:
+#   - frontcnn_base_channels: 16 (vs 8)
+#   - clstm_hidden: 64 (vs 32)
+#   - slstm_hidden: 32 (vs 16)
+#   - classhead_hidden: 128 (vs 64)
+#   - Higher dropout: 0.4 (vs 0.3)
+#   - 200 epochs (vs 50)
 #
 # USAGE:
-#   sbatch run_ablation_array.sh
+#   sbatch run_highcap.sh
 #
 # =============================================================================
 
 # Set paths
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
-MODELS_DIR="$SHERLOCK_DIR/models/ablation"
+MODELS_DIR="$SHERLOCK_DIR/models/highcap"
 
 # Data paths
 LABELS_CSV="/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW.csv"
@@ -48,59 +52,24 @@ mkdir -p "$MODELS_DIR"
 # Define experiment configurations based on array task ID
 case $SLURM_ARRAY_TASK_ID in
     0)
-        EXP_NAME="area_only"
-        USE_IMGSEQ=""
-        USE_AREASEQ="--use_areaseq"
-        USE_CLOUDYSEQ=""
-        CLOUDY_VAR=""
+        EXP_NAME="cbam"
+        ATTENTION_TYPE="full"
         ;;
     1)
-        EXP_NAME="img_only"
-        USE_IMGSEQ="--use_imgseq"
-        USE_AREASEQ=""
-        USE_CLOUDYSEQ=""
-        CLOUDY_VAR=""
-        ;;
-    2)
-        EXP_NAME="img_area"
-        USE_IMGSEQ="--use_imgseq"
-        USE_AREASEQ="--use_areaseq"
-        USE_CLOUDYSEQ=""
-        CLOUDY_VAR=""
-        ;;
-    3)
-        EXP_NAME="img_area_cloudyrgb"
-        USE_IMGSEQ="--use_imgseq"
-        USE_AREASEQ="--use_areaseq"
-        USE_CLOUDYSEQ="--use_cloudyseq"
-        CLOUDY_VAR="--cloudy_seq_var cloudy_seq_rgb"
-        ;;
-    4)
-        EXP_NAME="img_area_cloudyrgbn"
-        USE_IMGSEQ="--use_imgseq"
-        USE_AREASEQ="--use_areaseq"
-        USE_CLOUDYSEQ="--use_cloudyseq"
-        CLOUDY_VAR="--cloudy_seq_var cloudy_seq_rgbn"
-        ;;
-    5)
-        EXP_NAME="img_area_cloudybns16"
-        USE_IMGSEQ="--use_imgseq"
-        USE_AREASEQ="--use_areaseq"
-        USE_CLOUDYSEQ="--use_cloudyseq"
-        CLOUDY_VAR="--cloudy_seq_var cloudy_seq_bns16"
+        EXP_NAME="arch"
+        ATTENTION_TYPE="arch"
         ;;
 esac
 
-SAVE_PATH="$MODELS_DIR/lakevision_${EXP_NAME}.pth"
+SAVE_PATH="$MODELS_DIR/lakevision_highcap_${EXP_NAME}.pth"
 
 echo "=============================================="
-echo "Lake Vision Ablation Study"
+echo "Lake Vision Training - High Capacity Model"
 echo "=============================================="
 echo "Experiment: $EXP_NAME (array task $SLURM_ARRAY_TASK_ID)"
-echo "USE_IMGSEQ: $USE_IMGSEQ"
-echo "USE_AREASEQ: $USE_AREASEQ"
-echo "USE_CLOUDYSEQ: $USE_CLOUDYSEQ"
-echo "CLOUDY_VAR: $CLOUDY_VAR"
+echo "Attention type: $ATTENTION_TYPE"
+echo "Labels CSV: $LABELS_CSV"
+echo "NC Directory: $NC_DIR"
 echo "Model save path: $SAVE_PATH"
 echo "=============================================="
 
@@ -124,7 +93,7 @@ export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
 export WANDB_MODE=offline
 export WANDB_DIR="$SHERLOCK_DIR"
 export WANDB_PROJECT="lake-vision"
-export WANDB_RUN_GROUP="ablation"
+export WANDB_RUN_GROUP="highcap"
 
 cd $SHERLOCK_DIR
 
@@ -135,31 +104,30 @@ echo ""
 
 START_TIME=$(date +%s)
 
-# Training configuration
+# High-capacity training configuration
 python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --labels_csv "$LABELS_CSV" \
     --nc_dir "$NC_DIR" \
     --id_col "new_id" \
     --label_col "label_rines" \
-    --epochs 50 \
+    --epochs 200 \
     --batch_size 4 \
     --lr 1e-4 \
     --weight_decay 1e-5 \
     --use_scheduler \
     --seq_len 153 \
     --band_stats "$BAND_STATS" \
-    $USE_IMGSEQ \
-    $USE_AREASEQ \
-    $USE_CLOUDYSEQ \
-    $CLOUDY_VAR \
-    --attention_type "none" \
+    --cloudy_seq_var "cloudy_seq_rgb" \
+    --use_imgseq \
+    --use_areaseq \
+    --attention_type "$ATTENTION_TYPE" \
     --num_classes 4 \
-    --frontcnn_base_channels 8 \
+    --frontcnn_base_channels 16 \
     --frontcnn_num_layers 4 \
-    --clstm_hidden 32 \
-    --slstm_hidden 16 \
-    --classhead_hidden 64 \
-    --classhead_dropout 0.3 \
+    --clstm_hidden 64 \
+    --slstm_hidden 32 \
+    --classhead_hidden 128 \
+    --classhead_dropout 0.4 \
     --save_path "$SAVE_PATH" \
     --num_workers 4 \
     --seed 42
