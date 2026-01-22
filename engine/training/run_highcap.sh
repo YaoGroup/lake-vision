@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64GB
+#SBATCH --mem=900GB
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -29,6 +29,7 @@
 #   - classhead_hidden: 128 (vs 64)
 #   - Higher dropout: 0.4 (vs 0.3)
 #   - 200 epochs (vs 50)
+#   - 800GB RAM with training data preloaded to memory (eliminates I/O bottleneck)
 #
 # USAGE:
 #   sbatch run_highcap.sh
@@ -131,8 +132,9 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --classhead_dropout 0.4 \
     --gradient_checkpointing \
     --accumulation_steps 8 \
+    --preload_to_ram \
     --save_path "$SAVE_PATH" \
-    --num_workers 4 \
+    --num_workers 0 \
     --seed 42
 
 EXIT_CODE=$?

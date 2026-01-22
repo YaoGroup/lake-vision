@@ -293,6 +293,7 @@ def train(config: dict):
     print(f"learn_cloudy_weights: {config.get('learn_cloudy_weights', False)}")
     print(f"grad_checkpointing:   {config.get('gradient_checkpointing', False)}")
     print(f"accumulation_steps:   {config.get('accumulation_steps', 1)}")
+    print(f"preload_to_ram:       {config.get('preload_to_ram', False)}")
 
     # Create data splits
     train_ids, val_ids, test_ids = create_splits(
@@ -332,10 +333,11 @@ def train(config: dict):
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
     }
 
-    # Create datasets
-    train_dataset = LakeDataset(train_paths, **dataset_kwargs)
-    val_dataset = LakeDataset(val_paths, **dataset_kwargs)
-    test_dataset = LakeDataset(test_paths, **dataset_kwargs)
+    # Create datasets (preload only training set to RAM if requested)
+    preload_to_ram = config.get("preload_to_ram", False)
+    train_dataset = LakeDataset(train_paths, preload_to_ram=preload_to_ram, **dataset_kwargs)
+    val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
+    test_dataset = LakeDataset(test_paths, preload_to_ram=False, **dataset_kwargs)
 
     # Create loaders
     train_loader = DataLoader(
@@ -619,6 +621,8 @@ def main():
                         help="Use gradient checkpointing to reduce GPU memory (trades compute for memory)")
     parser.add_argument("--accumulation_steps", type=int, default=1,
                         help="Gradient accumulation steps (effective batch = batch_size * accumulation_steps)")
+    parser.add_argument("--preload_to_ram", action="store_true", default=False,
+                        help="Preload training data to RAM (requires ~1GB per lake, ~700GB for full training set)")
 
     # Output
     parser.add_argument("--save_path", type=str, default=None,

@@ -51,6 +51,9 @@ class LakeDataset(Dataset):
             If provided, uses per-band mean/std normalization instead of simple scaling.
         cloudy_seq_var: Name of the cloudy_seq variable in NC files (default: 'cloudy_seq_rgb').
             Set to None to disable cloudy_seq loading.
+        preload_to_ram: Whether to preload all NC files into RAM during initialization.
+            This eliminates I/O during training but requires ~1GB per lake file.
+            Recommended for training sets when sufficient memory is available (e.g., 800GB for ~700 lakes).
 
     Returns per sample:
         img_seq: Tensor of shape [seq_len, C, H, W] where C = 3 (RGB) + optional bands + 1 (mask)
@@ -83,6 +86,8 @@ class LakeDataset(Dataset):
         band_stats: Optional[Union[str, Path, Dict]] = None,
         # Cloudy sequence variable name
         cloudy_seq_var: Optional[str] = 'cloudy_seq_rgb',
+        # RAM preloading
+        preload_to_ram: bool = False,
     ):
         self.seq_len = seq_len
         self.default_label = label
@@ -127,6 +132,12 @@ class LakeDataset(Dataset):
         if labels_file is not None:
             self.labels = self._load_labels(labels_file, id_col, label_col)
 
+        # Preload data to RAM if requested
+        self.preload_to_ram = preload_to_ram
+        self._cache = None
+        if preload_to_ram:
+            self._preload_all_data()
+
     def _collect_paths(self, data_paths) -> List[Path]:
         """Collect all .nc file paths from input."""
         if isinstance(data_paths, (str, Path)):
@@ -157,39 +168,106 @@ class LakeDataset(Dataset):
         df = df.dropna(subset=[id_col, label_col])
         return dict(zip(df[id_col], df[label_col].astype(int)))
 
+    def _preload_all_data(self):
+        """Preload all NC files into RAM for faster training.
+
+        Stores raw data (imagery, water_area, cloudy_seq, lake_id) for each file.
+        Processing (normalization, windowing) is still done in __getitem__.
+        """
+        import time
+        print(f"Preloading {len(self.file_paths)} NC files to RAM...")
+        start_time = time.time()
+
+        self._cache = []
+        for i, fp in enumerate(self.file_paths):
+            ds = xr.open_dataset(fp)
+
+            # Extract raw data
+            all_imagery = ds['imagery'].values  # [T, C_all, H, W]
+            water_area = ds['water_area'].values  # [T]
+            lake_id = ds.attrs.get('lake_id', fp.stem)
+
+            # Load cloudy_seq if available
+            if self.cloudy_seq_var and self.cloudy_seq_var in ds:
+                cloudy_seq_data = ds[self.cloudy_seq_var].values  # [T]
+            else:
+                cloudy_seq_data = np.ones_like(water_area)
+
+            # Get channel names and indices
+            nc_channels = list(ds.coords['channel'].values)
+            ds.close()
+
+            # Select only the channels we want
+            channel_indices = []
+            for ch in self.channels_to_load:
+                if ch in nc_channels:
+                    channel_indices.append(nc_channels.index(ch))
+                else:
+                    raise ValueError(f"Channel '{ch}' not found in NC file. Available: {nc_channels}")
+
+            imagery = all_imagery[:, channel_indices, :, :]  # [T, C_selected, H, W]
+
+            # Store in cache
+            self._cache.append({
+                'imagery': imagery,
+                'water_area': water_area,
+                'cloudy_seq': cloudy_seq_data,
+                'lake_id': lake_id,
+            })
+
+            # Progress update every 100 files
+            if (i + 1) % 100 == 0 or (i + 1) == len(self.file_paths):
+                elapsed = time.time() - start_time
+                rate = (i + 1) / elapsed
+                remaining = (len(self.file_paths) - i - 1) / rate if rate > 0 else 0
+                print(f"  Loaded {i + 1}/{len(self.file_paths)} files "
+                      f"({elapsed:.1f}s elapsed, ~{remaining:.1f}s remaining)")
+
+        total_time = time.time() - start_time
+        print(f"Preloading complete: {len(self.file_paths)} files in {total_time:.1f}s")
+
     def __len__(self):
         return len(self.file_paths)
 
     def __getitem__(self, idx):
-        # load the NetCDF file
-        fp = self.file_paths[idx]
-        ds = xr.open_dataset(fp)
-
-        # extract data - select only the channels we need
-        all_imagery = ds['imagery'].values  # [T, C_all, H, W]
-        water_area = ds['water_area'].values  # [T]
-        lake_id = ds.attrs.get('lake_id', fp.stem)
-
-        # Load cloudy_seq if available
-        if self.cloudy_seq_var and self.cloudy_seq_var in ds:
-            cloudy_seq_data = ds[self.cloudy_seq_var].values  # [T]
+        # Load data from cache or disk
+        if self._cache is not None:
+            # Use preloaded data
+            cached = self._cache[idx]
+            imagery = cached['imagery']
+            water_area = cached['water_area']
+            cloudy_seq_data = cached['cloudy_seq']
+            lake_id = cached['lake_id']
         else:
-            # Default to all ones (all frames useful) if not available
-            cloudy_seq_data = np.ones_like(water_area)
+            # Load from disk
+            fp = self.file_paths[idx]
+            ds = xr.open_dataset(fp)
 
-        # Get channel names from the NC file
-        nc_channels = list(ds.coords['channel'].values)
-        ds.close()
+            # extract data - select only the channels we need
+            all_imagery = ds['imagery'].values  # [T, C_all, H, W]
+            water_area = ds['water_area'].values  # [T]
+            lake_id = ds.attrs.get('lake_id', fp.stem)
 
-        # Select only the channels we want
-        channel_indices = []
-        for ch in self.channels_to_load:
-            if ch in nc_channels:
-                channel_indices.append(nc_channels.index(ch))
+            # Load cloudy_seq if available
+            if self.cloudy_seq_var and self.cloudy_seq_var in ds:
+                cloudy_seq_data = ds[self.cloudy_seq_var].values  # [T]
             else:
-                raise ValueError(f"Channel '{ch}' not found in NC file. Available: {nc_channels}")
+                # Default to all ones (all frames useful) if not available
+                cloudy_seq_data = np.ones_like(water_area)
 
-        imagery = all_imagery[:, channel_indices, :, :]  # [T, C_selected, H, W]
+            # Get channel names from the NC file
+            nc_channels = list(ds.coords['channel'].values)
+            ds.close()
+
+            # Select only the channels we want
+            channel_indices = []
+            for ch in self.channels_to_load:
+                if ch in nc_channels:
+                    channel_indices.append(nc_channels.index(ch))
+                else:
+                    raise ValueError(f"Channel '{ch}' not found in NC file. Available: {nc_channels}")
+
+            imagery = all_imagery[:, channel_indices, :, :]  # [T, C_selected, H, W]
 
         # find center index (max water area)
         water_area_filled = np.nan_to_num(water_area, nan=0.0)
