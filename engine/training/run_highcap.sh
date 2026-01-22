@@ -10,7 +10,6 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64GB
 #SBATCH -C GPU_SKU:A100_SXM4
-#SBATCH -C GPU_MEM:80GB
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
 #SBATCH --array=0-1
@@ -112,7 +111,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --id_col "new_id" \
     --label_col "label_rines" \
     --epochs 200 \
-    --batch_size 4 \
+    --batch_size 2 \
     --lr 1e-4 \
     --weight_decay 1e-5 \
     --use_scheduler \
@@ -131,6 +130,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --classhead_hidden 128 \
     --classhead_dropout 0.4 \
     --gradient_checkpointing \
+    --accumulation_steps 8 \
     --save_path "$SAVE_PATH" \
     --num_workers 4 \
     --seed 42
