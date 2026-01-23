@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lv_highcap
+#SBATCH --job-name=hcap_nochkpt
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%A_%a.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%A_%a.err
 #SBATCH --time=120:00:00
@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=900GB
+#SBATCH --mem=1000GB
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -112,7 +112,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --id_col "new_id" \
     --label_col "label_rines" \
     --epochs 200 \
-    --batch_size 2 \
+    --batch_size 4 \
     --lr 1e-4 \
     --weight_decay 1e-5 \
     --use_scheduler \
@@ -130,8 +130,6 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --slstm_hidden 32 \
     --classhead_hidden 128 \
     --classhead_dropout 0.4 \
-    --gradient_checkpointing \
-    --accumulation_steps 8 \
     --preload_to_ram \
     --save_path "$SAVE_PATH" \
     --num_workers 0 \
