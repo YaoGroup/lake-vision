@@ -4,12 +4,19 @@ Preprocess raw imagery timestacks into combined datasets (imagery + water_area),
 optionally appending labels and class probabilities as attributes.
 
 Usage:
+    # Full preprocessing + labels
     python preprocess_lakes.py \
         --tstack_dir /path/to/tstacks \
         --area_file /path/to/all_lakes_2019.nc \
         --output_dir /path/to/processed \
-        --labels_file /path/to/labels.csv \
-        --max_lakes 50
+        --labels_file /path/to/labels.csv
+
+    # Labels only: read from input_dir, write labeled copies to output_dir
+    python preprocess_lakes.py \
+        --labels_only \
+        --input_dir /path/to/existing_nc_files \
+        --output_dir /path/to/labeled_output \
+        --labels_file /path/to/labels.csv
 """
 import argparse
 import sys
@@ -42,15 +49,15 @@ def load_label_lookup(labels_path, label_columns):
     return lookup
 
 
-def append_labels_to_nc(nc_path, label_row):
-    """Open an existing .nc file and append label attributes."""
-    ds = xr.open_dataset(nc_path)
+def append_labels_and_save(input_path, output_path, label_row):
+    """Open a .nc file, append label attributes, and save to a new path."""
+    ds = xr.open_dataset(input_path)
     for col, val in label_row.items():
         # Convert numpy types to native Python for clean NetCDF storage
         if hasattr(val, "item"):
             val = val.item()
         ds.attrs[col] = val
-    ds.to_netcdf(nc_path, mode="w")
+    ds.to_netcdf(output_path)
     ds.close()
 
 
@@ -61,20 +68,26 @@ def main():
     parser.add_argument(
         "--tstack_dir",
         type=str,
-        required=True,
-        help="Directory containing raw tstack_*.nc files",
+        default=None,
+        help="Directory containing raw tstack_*.nc files (for full preprocessing)",
     )
     parser.add_argument(
         "--area_file",
         type=str,
-        required=True,
-        help="Path to area sequences file (e.g., all_lakes_2019.nc)",
+        default=None,
+        help="Path to area sequences file (for full preprocessing)",
+    )
+    parser.add_argument(
+        "--input_dir",
+        type=str,
+        default=None,
+        help="Directory containing existing .nc files to label (for --labels_only mode)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         required=True,
-        help="Directory to save processed .nc files",
+        help="Directory to save output .nc files",
     )
     parser.add_argument(
         "--labels_file",
@@ -116,12 +129,11 @@ def main():
     parser.add_argument(
         "--labels_only",
         action="store_true",
-        help="Skip preprocessing; only append labels to existing .nc files in output_dir",
+        help="Skip preprocessing; read .nc files from --input_dir, append labels, save to --output_dir",
     )
 
     args = parser.parse_args()
 
-    tstack_dir = Path(args.tstack_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -131,29 +143,43 @@ def main():
         label_lookup = load_label_lookup(args.labels_file, args.label_columns)
         print()
 
-    # --- Labels-only mode: just append to existing files ---
+    # --- Labels-only mode: read from input_dir, write labeled copies to output_dir ---
     if args.labels_only:
         if label_lookup is None:
             print("ERROR: --labels_only requires --labels_file")
             sys.exit(1)
+        if args.input_dir is None:
+            print("ERROR: --labels_only requires --input_dir")
+            sys.exit(1)
 
-        nc_files = sorted(output_dir.glob("*.nc"))
-        print(f"Labels-only mode: found {len(nc_files)} .nc files in {output_dir}\n")
+        input_dir = Path(args.input_dir)
+        nc_files = sorted(input_dir.glob("*.nc"))
+        print(f"Labels-only mode:")
+        print(f"  Reading from: {input_dir}")
+        print(f"  Writing to:   {output_dir}")
+        print(f"  Found {len(nc_files)} .nc files\n")
 
         matched, skipped = 0, 0
         for nc_path in nc_files:
             lake_id = nc_path.stem  # e.g., CW2019_1524
             if lake_id in label_lookup:
-                append_labels_to_nc(str(nc_path), label_lookup[lake_id])
+                out_path = output_dir / nc_path.name
+                append_labels_and_save(str(nc_path), str(out_path), label_lookup[lake_id])
                 matched += 1
             else:
                 print(f"  SKIP {nc_path.name}: '{lake_id}' not found in CSV")
                 skipped += 1
 
         print(f"\nDone! {matched} labeled, {skipped} skipped")
+        print(f"Output saved to {output_dir}")
         return
 
     # --- Full preprocessing mode ---
+    if args.tstack_dir is None or args.area_file is None:
+        print("ERROR: full preprocessing requires --tstack_dir and --area_file")
+        sys.exit(1)
+
+    tstack_dir = Path(args.tstack_dir)
     tstack_files = sorted(tstack_dir.glob("tstack_*.nc"))
 
     if args.max_lakes is not None:
@@ -204,7 +230,7 @@ def main():
 
             # Append labels if available
             if label_lookup and lake_id in label_lookup:
-                append_labels_to_nc(str(output_path), label_lookup[lake_id])
+                append_labels_and_save(str(output_path), str(output_path), label_lookup[lake_id])
                 label_matched += 1
             elif label_lookup:
                 label_skipped += 1
