@@ -92,8 +92,10 @@ def remap_labels_ed_split(labels_csv, id_col='new_id', label_col='label_rines', 
             edm_edf = str(row.get(edm_edf_col, '?')).strip().lower()
             if edm_edf == 'm':
                 remapped[lake_id] = 1  # moulin -> LD+MD
-            else:  # 'f' or '?' -> HF
-                remapped[lake_id] = 2
+            elif edm_edf == 'f':
+                remapped[lake_id] = 2  # hydrofracture -> HF
+            else:  # '?' or unknown -> drop from dataset
+                continue
         elif orig_label == 2:  # LD -> 1 (LD+MD)
             remapped[lake_id] = 1
         elif orig_label == 3:  # CD -> 3
