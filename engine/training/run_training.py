@@ -12,6 +12,7 @@ import argparse
 import random
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +49,63 @@ except ImportError:
 
 
 # Class names for lake drainage types
-CLASS_NAMES = ['ND', 'ED', 'LD', 'CD']  # 0: No Drainage, 1: Englacial, 2: Lateral, 3: Crevasse
+CLASS_NAMES_ORIGINAL = ['ND', 'ED', 'LD', 'CD']  # 0: No Drainage, 1: Englacial, 2: Lateral, 3: Crevasse
+CLASS_NAMES_ED_SPLIT = ['ND', 'LD_MD', 'HF', 'CD']  # 0: No Drainage, 1: Lateral+Moulin, 2: Hydrofracture, 3: Crevasse
+
+# Default (overridden by label_mode in train())
+CLASS_NAMES = CLASS_NAMES_ORIGINAL
+
+
+def remap_labels_ed_split(labels_csv, id_col='new_id', label_col='label_rines', edm_edf_col='edm_edf'):
+    """
+    Remap labels for the ed_split scheme: split ED into moulin (merged with LD) and hydrofracture.
+
+    Original: ND=0, ED=1, LD=2, CD=3
+    New:      ND=0, LD+MD=1, HF=2, CD=3
+
+    ED lakes with edm_edf='m' (moulin) -> 1 (merged with LD)
+    ED lakes with edm_edf='f' (hydrofracture) or '?' -> 2 (HF)
+    LD lakes -> 1
+    ND lakes -> 0 (unchanged)
+    CD lakes -> 3 (unchanged)
+
+    Args:
+        labels_csv: Path to CSV with labels
+        id_col: Column name for lake IDs
+        label_col: Column name for original labels
+        edm_edf_col: Column name for moulin/hydrofracture indicator
+
+    Returns:
+        dict: mapping lake_id -> remapped label (int)
+    """
+    df = pd.read_csv(labels_csv)
+    df = df.dropna(subset=[id_col, label_col])
+
+    remapped = {}
+    for _, row in df.iterrows():
+        lake_id = row[id_col]
+        orig_label = int(row[label_col])
+
+        if orig_label == 0:  # ND -> 0
+            remapped[lake_id] = 0
+        elif orig_label == 1:  # ED -> split based on edm_edf
+            edm_edf = str(row.get(edm_edf_col, '?')).strip().lower()
+            if edm_edf == 'm':
+                remapped[lake_id] = 1  # moulin -> LD+MD
+            else:  # 'f' or '?' -> HF
+                remapped[lake_id] = 2
+        elif orig_label == 2:  # LD -> 1 (LD+MD)
+            remapped[lake_id] = 1
+        elif orig_label == 3:  # CD -> 3
+            remapped[lake_id] = 3
+
+    # Print distribution
+    counts = Counter(remapped.values())
+    print(f"Remapped label distribution (ed_split):")
+    for i, name in enumerate(CLASS_NAMES_ED_SPLIT):
+        print(f"  {name} ({i}): {counts.get(i, 0)}")
+
+    return remapped
 
 
 def create_splits(
@@ -60,6 +117,7 @@ def create_splits(
     test_ratio: float = 0.10,
     seed: int = 42,
     stratify: bool = True,
+    labels_dict: dict = None,
 ):
     """
     Create train/val/test splits from labels CSV.
@@ -73,15 +131,20 @@ def create_splits(
         test_ratio: Fraction for test
         seed: Random seed
         stratify: Whether to stratify splits by label
+        labels_dict: Optional pre-remapped labels dict (lake_id -> int).
+            If provided, uses these labels for stratification instead of label_col.
 
     Returns:
         tuple: (train_ids, val_ids, test_ids) as lists of lake IDs
     """
-    df = pd.read_csv(labels_csv)
-    df = df.dropna(subset=[id_col, label_col])
-
-    ids = df[id_col].tolist()
-    labels = df[label_col].astype(int).tolist()
+    if labels_dict is not None:
+        ids = list(labels_dict.keys())
+        labels = [labels_dict[lid] for lid in ids]
+    else:
+        df = pd.read_csv(labels_csv)
+        df = df.dropna(subset=[id_col, label_col])
+        ids = df[id_col].tolist()
+        labels = df[label_col].astype(int).tolist()
 
     # First split: train vs (val+test)
     stratify_labels = labels if stratify else None
@@ -295,6 +358,25 @@ def train(config: dict):
     print(f"accumulation_steps:   {config.get('accumulation_steps', 1)}")
     print(f"preload_to_ram:       {config.get('preload_to_ram', False)}")
 
+    # Label mode: remap labels if using ed_split
+    label_mode = config.get("label_mode", "original")
+    print(f"\n--- LABEL MODE ---")
+    print(f"label_mode:     {label_mode}")
+
+    global CLASS_NAMES
+    labels_dict = None
+
+    if label_mode == "ed_split":
+        CLASS_NAMES = CLASS_NAMES_ED_SPLIT
+        labels_dict = remap_labels_ed_split(
+            config["labels_csv"],
+            id_col=config.get("id_col", "new_id"),
+            label_col=config.get("label_col", "label_rines"),
+            edm_edf_col=config.get("edm_edf_col", "edm_edf"),
+        )
+    else:
+        CLASS_NAMES = CLASS_NAMES_ORIGINAL
+
     # Create data splits
     train_ids, val_ids, test_ids = create_splits(
         config["labels_csv"],
@@ -305,6 +387,7 @@ def train(config: dict):
         test_ratio=config.get("test_ratio", 0.10),
         seed=seed,
         stratify=config.get("stratify", True),
+        labels_dict=labels_dict,
     )
 
     # Build file paths from IDs
@@ -320,18 +403,45 @@ def train(config: dict):
 
     print(f"Found files: train={len(train_paths)}, val={len(val_paths)}, test={len(test_paths)}")
 
+    # Compute class weights from training set for weighted CrossEntropyLoss
+    if labels_dict is not None:
+        train_labels = [labels_dict[lid] for lid in train_ids if (nc_dir / f"{lid}.nc").exists()]
+    else:
+        df_labels = pd.read_csv(config["labels_csv"])
+        df_labels = df_labels.dropna(subset=[config.get("id_col", "new_id"), config.get("label_col", "label_rines")])
+        label_map = dict(zip(df_labels[config.get("id_col", "new_id")],
+                             df_labels[config.get("label_col", "label_rines")].astype(int)))
+        train_labels = [label_map[lid] for lid in train_ids if lid in label_map and (nc_dir / f"{lid}.nc").exists()]
+
+    label_counts = Counter(train_labels)
+    num_classes = config.get("num_classes", 4)
+    total_train = len(train_labels)
+    class_weights = torch.tensor([
+        total_train / (num_classes * label_counts.get(i, 1))
+        for i in range(num_classes)
+    ], dtype=torch.float32)
+
+    print(f"\n--- CLASS WEIGHTS (inverse frequency) ---")
+    for i, name in enumerate(CLASS_NAMES[:num_classes]):
+        print(f"  {name} ({i}): count={label_counts.get(i, 0)}, weight={class_weights[i]:.3f}")
+
     # Dataset configuration
     dataset_kwargs = {
         'seq_len': config.get("seq_len", 153),
-        'labels_file': config["labels_csv"],
-        'id_col': config.get("id_col", "new_id"),
-        'label_col': config.get("label_col", "label_rines"),
         'use_nir': config.get("use_nir", False),
         'use_swir16': config.get("use_swir16", False),
         'use_swir22': config.get("use_swir22", False),
         'band_stats': config.get("band_stats"),
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
     }
+
+    # Pass labels: use remapped dict if available, otherwise read from CSV
+    if labels_dict is not None:
+        dataset_kwargs['labels_dict'] = labels_dict
+    else:
+        dataset_kwargs['labels_file'] = config["labels_csv"]
+        dataset_kwargs['id_col'] = config.get("id_col", "new_id")
+        dataset_kwargs['label_col'] = config.get("label_col", "label_rines")
 
     # Create datasets (preload only training set to RAM if requested)
     preload_to_ram = config.get("preload_to_ram", False)
@@ -391,8 +501,8 @@ def train(config: dict):
     print(f"Total parameters:     {total_params:,}")
     print("=" * 70)
 
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
+    # Loss and optimizer (weighted by inverse class frequency)
+    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=config.get("lr", 1e-4),
@@ -562,6 +672,11 @@ def main():
                         help="Column name for lake IDs in CSV")
     parser.add_argument("--label_col", type=str, default="label_rines",
                         help="Column name for labels in CSV")
+    parser.add_argument("--label_mode", type=str, default="original",
+                        choices=["original", "ed_split"],
+                        help="Label scheme: 'original' (ND/ED/LD/CD) or 'ed_split' (ND/LD+MD/HF/CD)")
+    parser.add_argument("--edm_edf_col", type=str, default="edm_edf",
+                        help="Column name for moulin/hydrofracture indicator (used with --label_mode ed_split)")
 
     # Training hyperparameters
     parser.add_argument("--epochs", type=int, default=50)

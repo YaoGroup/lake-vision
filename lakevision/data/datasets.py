@@ -40,6 +40,9 @@ class LakeDataset(Dataset):
         labels_file: optional path to a labels CSV file.
         label_col: column name for labels in CSV (default: 'label')
         id_col: column name for lake IDs in CSV (default: 'lake_id')
+        labels_dict: optional pre-computed dict mapping lake_id -> label (int).
+            If provided, overrides labels_file. Useful when labels need remapping
+            before being passed to the dataset (e.g., label_mode='ed_split').
         normalize_imagery: whether to normalize imagery channels (default: True)
         imagery_scale: scale factor for legacy normalization if band_stats=None (default: 10000.0)
         normalize_area: whether to min-max normalize water area per sample (default: True)
@@ -86,6 +89,8 @@ class LakeDataset(Dataset):
         band_stats: Optional[Union[str, Path, Dict]] = None,
         # Cloudy sequence variable name
         cloudy_seq_var: Optional[str] = 'cloudy_seq_rgb',
+        # Pre-computed labels dict (overrides labels_file)
+        labels_dict: Optional[Dict[str, int]] = None,
         # RAM preloading
         preload_to_ram: bool = False,
     ):
@@ -127,9 +132,11 @@ class LakeDataset(Dataset):
         if len(self.file_paths)==0:
             raise ValueError(f"No .nc files found in {data_paths}")
 
-        # load labels if provided
+        # load labels: labels_dict takes priority over labels_file
         self.labels = {}
-        if labels_file is not None:
+        if labels_dict is not None:
+            self.labels = labels_dict
+        elif labels_file is not None:
             self.labels = self._load_labels(labels_file, id_col, label_col)
 
         # Preload data to RAM if requested
