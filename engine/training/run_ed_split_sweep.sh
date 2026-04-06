@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64GB
+#SBATCH --mem=256GB
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -129,7 +129,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --label_col "label_rines" \
     --label_mode "ed_split" \
     --epochs 250 \
-    --batch_size 4 \
+    --batch_size 8 \
     --lr $LR \
     --seq_len 153 \
     --band_stats "$BAND_STATS" \
@@ -144,7 +144,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --classhead_hidden 64 \
     --classhead_dropout 0.3 \
     --save_path "$SAVE_PATH" \
-    --num_workers 2 \
+    --num_workers 4 \
     --seed 42 \
     --wandb_name "$EXP_NAME"
 
