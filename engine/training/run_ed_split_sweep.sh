@@ -53,7 +53,7 @@ mkdir -p "$MODELS_DIR"
 # -------------------------------------------------------------------------
 
 ATTENTION_TYPES=("none" "spatial" "full" "arch")
-AREASEQ_OPTS=("" "--use_areaseq")
+AREASEQ_OPTS=("--no_areaseq" "--use_areaseq")
 AREASEQ_NAMES=("noarea" "area")
 OPTIMIZERS=("Adam" "SGD")
 
@@ -129,7 +129,8 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --label_col "label_rines" \
     --label_mode "ed_split" \
     --epochs 250 \
-    --batch_size 8 \
+    --batch_size 4 \
+    --accumulation_steps 2 \
     --lr $LR \
     --seq_len 153 \
     --band_stats "$BAND_STATS" \
