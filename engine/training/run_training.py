@@ -27,6 +27,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lakevision.data import LakeDataset
+from lakevision.data.transforms import AugmentedDatasetWrapper, AUGMENTATIONS
 from lakevision.models.classifier import LakeDrainageClassifier
 
 
@@ -451,6 +452,14 @@ def train(config: dict):
     val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
     test_dataset = LakeDataset(test_paths, preload_to_ram=False, **dataset_kwargs)
 
+    # Wrap training set with augmentations if requested
+    if config.get("augment", False):
+        base_size = len(train_dataset)
+        train_dataset = AugmentedDatasetWrapper(train_dataset)
+        print(f"\n--- AUGMENTATION ---")
+        print(f"Augmentations: {list(AUGMENTATIONS.keys())}")
+        print(f"Training set: {base_size} -> {len(train_dataset)} samples ({len(train_dataset) // base_size}x)")
+
     # Create loaders
     train_loader = DataLoader(
         train_dataset,
@@ -697,6 +706,8 @@ def main():
                         help="Path to band statistics JSON for normalization")
     parser.add_argument("--cloudy_seq_var", type=str, default="cloudy_seq_rgb",
                         help="Name of cloudy_seq variable in NC files")
+    parser.add_argument("--augment", action="store_true", default=False,
+                        help="Apply spatial augmentations (random flips + 90-degree rotations) to training data")
 
     # Model feature flags
     parser.add_argument("--use_imgseq", action="store_true", default=True,
