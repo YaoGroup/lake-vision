@@ -129,7 +129,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --label_col "label_rines" \
     --label_mode "ed_split" \
     --epochs 250 \
-    --batch_size 16 \
+    --batch_size 4 \
     --lr $LR \
     --seq_len 153 \
     --band_stats "$BAND_STATS" \
@@ -144,7 +144,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --classhead_hidden 64 \
     --classhead_dropout 0.3 \
     --save_path "$SAVE_PATH" \
-    --num_workers 4 \
+    --num_workers 2 \
     --seed 42 \
     --wandb_name "$EXP_NAME"
 
