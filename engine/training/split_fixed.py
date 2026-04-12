@@ -142,53 +142,109 @@ def verify_stratification(ordered_ids, id_to_label, n_values, parent_dist):
 def main():
     ap = argparse.ArgumentParser(description="Generate fixed stratified splits for ESSD")
     ap.add_argument("--labels_csv", nargs='+', required=True,
-                    help="One or more GUI labels CSVs (5-class schema)")
+                    help="One or more GUI labels CSVs (5-class schema). For the "
+                         "combined mode, this is the full labeled pool. For the "
+                         "crossyear mode, this is the train+val pool.")
+    ap.add_argument("--test_labels_csv", nargs='+', default=None,
+                    help="If set, enables crossyear mode: every lake in "
+                         "these CSVs becomes the fixed test set, and "
+                         "--labels_csv is split 80/20 into train/val.")
     ap.add_argument("--out_dir", required=True,
                     help="Output directory for train_ids.json, val_ids.json, test_ids.json")
     ap.add_argument("--id_col", default="lake_id")
     ap.add_argument("--label_col", default="label")
-    ap.add_argument("--train_ratio", type=float, default=0.7)
+    ap.add_argument("--train_ratio", type=float, default=0.7,
+                    help="Train fraction. In crossyear mode this is the fraction "
+                         "of --labels_csv used for train (default flips to 0.8).")
     ap.add_argument("--val_ratio", type=float, default=0.2)
-    ap.add_argument("--test_ratio", type=float, default=0.1)
+    ap.add_argument("--test_ratio", type=float, default=0.1,
+                    help="Ignored in crossyear mode (test is the entirety of "
+                         "--test_labels_csv).")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--check_n", nargs='+', type=int,
                     default=[200, 400, 600, 800, 1000],
                     help="Report stratification quality at these train-set sizes")
     args = ap.parse_args()
 
-    if abs((args.train_ratio + args.val_ratio + args.test_ratio) - 1.0) > 1e-6:
-        raise ValueError("ratios must sum to 1.0")
-
+    crossyear = args.test_labels_csv is not None
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # In crossyear mode, default to 80/20 if user didn't override
+    if crossyear:
+        # If user left the combined defaults (0.7/0.2/0.1), switch to 0.8/0.2
+        if abs(args.train_ratio + args.val_ratio + args.test_ratio - 1.0) < 1e-6 \
+                and args.test_ratio > 0:
+            args.train_ratio = 0.8
+            args.val_ratio = 0.2
+            args.test_ratio = 0.0
+        if abs(args.train_ratio + args.val_ratio - 1.0) > 1e-6:
+            raise ValueError(
+                f"In crossyear mode train_ratio + val_ratio must equal 1.0 "
+                f"(got {args.train_ratio} + {args.val_ratio})"
+            )
+    else:
+        if abs(args.train_ratio + args.val_ratio + args.test_ratio - 1.0) > 1e-6:
+            raise ValueError("ratios must sum to 1.0")
+
     # --- Load labels ---
     labels_dict = load_labels(args.labels_csv, args.id_col, args.label_col)
-    print(f"Loaded {len(labels_dict)} labeled lakes from {len(args.labels_csv)} CSV(s).")
+    print(f"Loaded {len(labels_dict)} labeled lakes from "
+          f"{len(args.labels_csv)} CSV(s) [train+val pool].")
     total = len(labels_dict)
     parent_counts = Counter(labels_dict.values())
     parent_dist = {c: n / total for c, n in parent_counts.items()}
-    print("\nParent distribution:")
+    print("\nParent distribution (train+val pool):")
     for i, name in enumerate(ESSD_5CLASS_MAP):
         print(f"  {name} ({i}): {parent_counts.get(i, 0):>5d}  ({parent_dist.get(i, 0.0):.1%})")
 
-    # --- Stratified 70/20/10 split ---
+    test_labels_dict = None
+    if crossyear:
+        test_labels_dict = load_labels(args.test_labels_csv, args.id_col, args.label_col)
+        # Drop any overlap between train+val and test (shouldn't happen for
+        # disjoint-by-year CSVs, but defensive)
+        overlap = set(labels_dict) & set(test_labels_dict)
+        if overlap:
+            print(f"\n  WARNING: {len(overlap)} lakes appear in both train+val "
+                  f"and test pools; removing from train+val.")
+            labels_dict = {k: v for k, v in labels_dict.items() if k not in overlap}
+        test_counts = Counter(test_labels_dict.values())
+        print(f"\nTest pool: {len(test_labels_dict)} lakes from "
+              f"{len(args.test_labels_csv)} CSV(s).")
+        print("Test distribution:")
+        for i, name in enumerate(ESSD_5CLASS_MAP):
+            n = test_counts.get(i, 0)
+            frac = n / len(test_labels_dict) if test_labels_dict else 0.0
+            print(f"  {name} ({i}): {n:>5d}  ({frac:.1%})")
+
+    # --- Stratified split of the train+val pool ---
     ids = list(labels_dict.keys())
     labels = [labels_dict[lid] for lid in ids]
 
-    train_ids, temp_ids, train_labels, temp_labels = train_test_split(
-        ids, labels,
-        test_size=args.val_ratio + args.test_ratio,
-        random_state=args.seed,
-        stratify=labels,
-    )
-    val_test_ratio = args.test_ratio / (args.val_ratio + args.test_ratio)
-    val_ids, test_ids, _, _ = train_test_split(
-        temp_ids, temp_labels,
-        test_size=val_test_ratio,
-        random_state=args.seed,
-        stratify=temp_labels,
-    )
+    if crossyear:
+        # Single split: train vs val. No test carved out here.
+        train_ids, val_ids, train_labels, _ = train_test_split(
+            ids, labels,
+            test_size=args.val_ratio,
+            random_state=args.seed,
+            stratify=labels,
+        )
+        test_ids = list(test_labels_dict.keys())
+    else:
+        # Two-stage split: train vs (val+test), then val vs test.
+        train_ids, temp_ids, train_labels, temp_labels = train_test_split(
+            ids, labels,
+            test_size=args.val_ratio + args.test_ratio,
+            random_state=args.seed,
+            stratify=labels,
+        )
+        val_test_ratio = args.test_ratio / (args.val_ratio + args.test_ratio)
+        val_ids, test_ids, _, _ = train_test_split(
+            temp_ids, temp_labels,
+            test_size=val_test_ratio,
+            random_state=args.seed,
+            stratify=temp_labels,
+        )
 
     print(f"\nSplit sizes: train={len(train_ids)}, val={len(val_ids)}, test={len(test_ids)}")
 
@@ -213,21 +269,27 @@ def main():
     _write("test_ids.json", sorted(test_ids))
 
     meta = {
+        "mode": "crossyear" if crossyear else "combined",
         "labels_csv": [str(p) for p in args.labels_csv],
+        "test_labels_csv": [str(p) for p in args.test_labels_csv] if crossyear else None,
         "seed": args.seed,
         "train_ratio": args.train_ratio,
         "val_ratio": args.val_ratio,
-        "test_ratio": args.test_ratio,
-        "total_lakes": total,
+        "test_ratio": args.test_ratio if not crossyear else None,
         "train_size": len(ordered_train_ids),
         "val_size": len(val_ids),
         "test_size": len(test_ids),
-        "parent_distribution": {
+        "train_val_pool_size": total,
+        "parent_distribution_trainval": {
             name: parent_counts.get(i, 0) for i, name in enumerate(ESSD_5CLASS_MAP)
         },
         "class_map": ESSD_5CLASS_MAP,
         "train_ids_are_nested_stratified": True,
     }
+    if crossyear:
+        meta["test_distribution"] = {
+            name: test_counts.get(i, 0) for i, name in enumerate(ESSD_5CLASS_MAP)
+        }
     with open(out_dir / "split_meta.json", 'w') as f:
         json.dump(meta, f, indent=2)
     print(f"  Wrote {out_dir / 'split_meta.json'}")

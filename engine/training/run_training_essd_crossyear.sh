@@ -38,13 +38,18 @@ LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
 LABELS_2018="$LABELS_ROOT/labels_CW_2018.csv"
 LABELS_2019="$LABELS_ROOT/labels_CW_2019.csv"
 
+SPLITS_DIR="$REPO_DIR/splits/essd_CW_crossyear"
+TRAIN_IDS="$SPLITS_DIR/train_ids.json"
+VAL_IDS="$SPLITS_DIR/val_ids.json"
+TEST_IDS="$SPLITS_DIR/test_ids.json"
+
 SAVE_PATH="$MODELS_DIR/lakevision_essd_crossyear.pth"
 
 mkdir -p "$SHERLOCK_DIR/logs" "$MODELS_DIR"
 
-for f in "$LABELS_2018" "$LABELS_2019"; do
+for f in "$LABELS_2018" "$LABELS_2019" "$TRAIN_IDS" "$VAL_IDS" "$TEST_IDS"; do
     if [ ! -f "$f" ]; then
-        echo "ERROR: missing labels file $f"
+        echo "ERROR: missing file $f"
         exit 1
     fi
 done
@@ -113,8 +118,9 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --id_col "lake_id" \
     --label_col "label" \
     --num_classes 5 \
-    --train_ratio 0.8 \
-    --val_ratio 0.2 \
+    --train_ids_file "$TRAIN_IDS" \
+    --val_ids_file "$VAL_IDS" \
+    --test_ids_file "$TEST_IDS" \
     --epochs 50 \
     --batch_size 16 \
     --amp \
