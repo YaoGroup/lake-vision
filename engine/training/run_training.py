@@ -9,6 +9,7 @@ For wandb sweeps:
     wandb agent <sweep_id>
 """
 import argparse
+import json
 import random
 import sys
 import time
@@ -52,6 +53,10 @@ except ImportError:
 # Class names for lake drainage types
 CLASS_NAMES_ORIGINAL = ['ND', 'ED', 'LD', 'CD']  # 0: No Drainage, 1: Englacial, 2: Lateral, 3: Crevasse
 CLASS_NAMES_ED_SPLIT = ['ND', 'LD_MD', 'HF', 'CD']  # 0: No Drainage, 1: Lateral+Moulin, 2: Hydrofracture, 3: Crevasse
+CLASS_NAMES_ESSD_5CLASS = ['ND', 'HF', 'MD', 'LD', 'CD']  # 0: No Drainage, 1: Hydrofracture, 2: Moulin Drainage, 3: Lateral, 4: Crevasse
+
+# String-to-int mapping for essd_5class (matches the GUI schema)
+ESSD_5CLASS_MAP = {name: i for i, name in enumerate(CLASS_NAMES_ESSD_5CLASS)}
 
 # Default (overridden by label_mode in train())
 CLASS_NAMES = CLASS_NAMES_ORIGINAL
@@ -109,6 +114,65 @@ def remap_labels_ed_split(labels_csv, id_col='new_id', label_col='label_rines', 
         print(f"  {name} ({i}): {counts.get(i, 0)}")
 
     return remapped
+
+
+def load_labels_essd_5class(csv_paths, id_col='lake_id', label_col='label'):
+    """Load labels from one or more GUI CSVs with the 5-class ESSD schema.
+
+    The sat-tile-stack labeling GUI writes string labels (ND/HF/MD/LD/CD)
+    in the `label` column. This function reads any number of such CSVs,
+    filters out rows with empty/missing labels (e.g. flagged-only rows),
+    and maps strings to integers 0-4.
+
+    Flagged lakes are kept (the `flagged` column is ignored here).
+
+    Args:
+        csv_paths: single path or list of paths to labels CSVs
+        id_col: lake ID column (default: 'lake_id')
+        label_col: label string column (default: 'label')
+
+    Returns:
+        dict mapping lake_id -> int label in [0, 4]
+    """
+    if isinstance(csv_paths, (str, Path)):
+        csv_paths = [csv_paths]
+
+    combined = {}
+    per_file_counts = {}
+    for csv_path in csv_paths:
+        df = pd.read_csv(csv_path)
+        df = df.dropna(subset=[id_col, label_col])
+        # Drop rows with empty-string labels (can happen when `flagged=True`
+        # but no label assigned yet)
+        df = df[df[label_col].astype(str).str.strip() != ""]
+
+        n = 0
+        for lid, lbl_str in zip(df[id_col].astype(str), df[label_col].astype(str)):
+            lbl_str = lbl_str.strip()
+            if lbl_str not in ESSD_5CLASS_MAP:
+                raise ValueError(
+                    f"Unknown label '{lbl_str}' in {csv_path}. "
+                    f"Expected one of {list(ESSD_5CLASS_MAP.keys())}."
+                )
+            if lid in combined and combined[lid] != ESSD_5CLASS_MAP[lbl_str]:
+                print(f"  WARNING: duplicate ID {lid} with conflicting labels; "
+                      f"keeping first occurrence")
+                continue
+            combined[lid] = ESSD_5CLASS_MAP[lbl_str]
+            n += 1
+        per_file_counts[str(csv_path)] = n
+
+    # Print per-file + combined distribution
+    print(f"\nLoaded essd_5class labels:")
+    for path, n in per_file_counts.items():
+        print(f"  {Path(path).name}: {n} labels")
+    counts = Counter(combined.values())
+    print(f"  Combined distribution:")
+    for i, name in enumerate(CLASS_NAMES_ESSD_5CLASS):
+        print(f"    {name} ({i}): {counts.get(i, 0)}")
+    print(f"  Total: {len(combined)} lakes")
+
+    return combined
 
 
 def create_splits(
@@ -173,12 +237,66 @@ def create_splits(
     return train_ids, val_ids, test_ids
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4, accumulation_steps=1):
+def create_splits_fixed_test(
+    labels_dict: dict,
+    test_labels_dict: dict,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.2,
+    seed: int = 42,
+    stratify: bool = True,
+):
+    """Create train/val from labels_dict and use test_labels_dict as the full test set.
+
+    Used for the cross-year ESSD baseline: train+val from one year (e.g. 2019),
+    held-out test from another year (e.g. 2018).
+
+    Args:
+        labels_dict: {lake_id: int} for the train+val pool.
+        test_labels_dict: {lake_id: int} for the held-out test set.
+        train_ratio, val_ratio: fractions within the train+val pool (must sum to 1.0).
+
+    Returns:
+        (train_ids, val_ids, test_ids)
+    """
+    if abs((train_ratio + val_ratio) - 1.0) > 1e-6:
+        raise ValueError(f"train_ratio + val_ratio must equal 1.0 "
+                         f"(got {train_ratio} + {val_ratio})")
+
+    # Warn if any overlap between train+val pool and test pool
+    overlap = set(labels_dict) & set(test_labels_dict)
+    if overlap:
+        print(f"  WARNING: {len(overlap)} lakes appear in both train+val and "
+              f"test pools; removing from train+val pool.")
+        labels_dict = {k: v for k, v in labels_dict.items() if k not in overlap}
+
+    ids = list(labels_dict.keys())
+    labels = [labels_dict[lid] for lid in ids]
+
+    stratify_labels = labels if stratify else None
+    train_ids, val_ids, _, _ = train_test_split(
+        ids, labels,
+        test_size=val_ratio,
+        random_state=seed,
+        stratify=stratify_labels,
+    )
+
+    test_ids = list(test_labels_dict.keys())
+    print(f"Split sizes (fixed test): train={len(train_ids)}, "
+          f"val={len(val_ids)}, test={len(test_ids)}")
+
+    return train_ids, val_ids, test_ids
+
+
+def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
+                    accumulation_steps=1, amp=False):
     """Train for one epoch and return loss + metrics.
 
     Args:
         accumulation_steps: Number of mini-batches to accumulate gradients over.
                            Effective batch size = batch_size * accumulation_steps.
+        amp: If True, run forward/backward in bf16 autocast. Halves activation
+             memory on A100, enables larger batch sizes. No GradScaler needed
+             because bf16 has the same dynamic range as fp32.
     """
     model.train()
     total_loss = 0.0
@@ -189,6 +307,8 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4, 
 
     optimizer.zero_grad()  # Zero gradients once at start
 
+    amp_dtype = torch.bfloat16 if amp else None
+
     for batch_idx, batch in enumerate(loader):
         img_seq, area_seq, cloudy_seq, labels, _ = batch
 
@@ -197,8 +317,13 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4, 
         cloudy_seq = cloudy_seq.to(device)
         labels = labels.to(device)
 
-        logits = model(img_seq, area_seq, cloudy_seq)
-        loss = criterion(logits, labels)
+        if amp:
+            with torch.autocast(device_type='cuda', dtype=amp_dtype):
+                logits = model(img_seq, area_seq, cloudy_seq)
+                loss = criterion(logits, labels)
+        else:
+            logits = model(img_seq, area_seq, cloudy_seq)
+            loss = criterion(logits, labels)
 
         # Scale loss by accumulation steps to maintain proper gradient magnitude
         loss = loss / accumulation_steps
@@ -243,7 +368,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4, 
     return avg_loss, metrics
 
 
-def evaluate(model, loader, criterion, device, num_classes=4):
+def evaluate(model, loader, criterion, device, num_classes=4, amp=False):
     """Evaluate model and return loss + metrics."""
     model.eval()
     total_loss = 0.0
@@ -251,6 +376,8 @@ def evaluate(model, loader, criterion, device, num_classes=4):
 
     all_preds = []
     all_labels = []
+
+    amp_dtype = torch.bfloat16 if amp else None
 
     with torch.no_grad():
         for batch in loader:
@@ -261,8 +388,13 @@ def evaluate(model, loader, criterion, device, num_classes=4):
             cloudy_seq = cloudy_seq.to(device)
             labels = labels.to(device)
 
-            logits = model(img_seq, area_seq, cloudy_seq)
-            loss = criterion(logits, labels)
+            if amp:
+                with torch.autocast(device_type='cuda', dtype=amp_dtype):
+                    logits = model(img_seq, area_seq, cloudy_seq)
+                    loss = criterion(logits, labels)
+            else:
+                logits = model(img_seq, area_seq, cloudy_seq)
+                loss = criterion(logits, labels)
 
             total_loss += loss.item()
             n_batches += 1
@@ -302,6 +434,17 @@ def count_parameters(model):
 
 def train(config: dict):
     """Main training function."""
+    # Normalize labels_csv to a list (argparse uses nargs='+').
+    # For non-essd_5class modes, collapse back to a single string for
+    # backward compatibility with create_splits() and pd.read_csv().
+    if isinstance(config.get("labels_csv"), list):
+        if config.get("label_mode", "original") != "essd_5class":
+            if len(config["labels_csv"]) > 1:
+                print(f"  WARNING: {len(config['labels_csv'])} CSVs passed but "
+                      f"label_mode is '{config.get('label_mode', 'original')}'. "
+                      f"Only the first will be used.")
+            config["labels_csv"] = config["labels_csv"][0]
+
     # Print header
     print("\n" + "=" * 70)
     print("LAKE-VISION TRAINING")
@@ -368,6 +511,7 @@ def train(config: dict):
 
     global CLASS_NAMES
     labels_dict = None
+    test_labels_dict = None  # Only set for essd_5class cross-year mode
 
     if label_mode == "ed_split":
         CLASS_NAMES = CLASS_NAMES_ED_SPLIT
@@ -377,21 +521,102 @@ def train(config: dict):
             label_col=config.get("label_col", "label_rines"),
             edm_edf_col=config.get("edm_edf_col", "edm_edf"),
         )
+    elif label_mode == "essd_5class":
+        CLASS_NAMES = CLASS_NAMES_ESSD_5CLASS
+        # labels_csv may be a list (merged for train+val+test) or single path.
+        # test_labels_csv, if set, holds the full held-out test set (cross-year).
+        labels_dict = load_labels_essd_5class(
+            config["labels_csv"],
+            id_col=config.get("id_col", "lake_id"),
+            label_col=config.get("label_col", "label"),
+        )
+        test_csv = config.get("test_labels_csv")
+        if test_csv:
+            test_labels_dict = load_labels_essd_5class(
+                test_csv,
+                id_col=config.get("id_col", "lake_id"),
+                label_col=config.get("label_col", "label"),
+            )
     else:
         CLASS_NAMES = CLASS_NAMES_ORIGINAL
 
-    # Create data splits
-    train_ids, val_ids, test_ids = create_splits(
-        config["labels_csv"],
-        id_col=config.get("id_col", "new_id"),
-        label_col=config.get("label_col", "label_rines"),
-        train_ratio=config.get("train_ratio", 0.7),
-        val_ratio=config.get("val_ratio", 0.20),
-        test_ratio=config.get("test_ratio", 0.10),
-        seed=seed,
-        stratify=config.get("stratify", True),
-        labels_dict=labels_dict,
-    )
+    # Create data splits — three paths:
+    #   1. Pre-computed ID files (learning-curve runs — fixed across N)
+    #   2. Cross-year fixed test set
+    #   3. Fresh stratified 70/20/10 split
+    train_ids_file = config.get("train_ids_file")
+    val_ids_file = config.get("val_ids_file")
+    test_ids_file = config.get("test_ids_file")
+
+    if train_ids_file or val_ids_file or test_ids_file:
+        if not (train_ids_file and val_ids_file and test_ids_file):
+            raise ValueError(
+                "When using pre-computed split files, all three "
+                "(--train_ids_file, --val_ids_file, --test_ids_file) must be set."
+            )
+
+        def _load_ids(path):
+            with open(path) as f:
+                return json.load(f)
+
+        train_ids = _load_ids(train_ids_file)
+        val_ids = _load_ids(val_ids_file)
+        test_ids = _load_ids(test_ids_file)
+        print(f"\nLoaded split IDs from files:")
+        print(f"  train={len(train_ids)} from {train_ids_file}")
+        print(f"  val  ={len(val_ids)} from {val_ids_file}")
+        print(f"  test ={len(test_ids)} from {test_ids_file}")
+
+        # Drop IDs not present in labels_dict (shouldn't happen if split
+        # was built from same CSVs, but be defensive)
+        known = set(labels_dict)
+        dropped = [lid for lid in (train_ids + val_ids + test_ids) if lid not in known]
+        if dropped:
+            print(f"  WARNING: {len(dropped)} IDs from split files not in labels; dropping.")
+            train_ids = [lid for lid in train_ids if lid in known]
+            val_ids = [lid for lid in val_ids if lid in known]
+            test_ids = [lid for lid in test_ids if lid in known]
+    elif test_labels_dict is not None:
+        # Cross-year: fixed held-out test set, 80/20 train/val from labels_dict
+        train_ids, val_ids, test_ids = create_splits_fixed_test(
+            labels_dict,
+            test_labels_dict,
+            train_ratio=config.get("train_ratio", 0.8),
+            val_ratio=config.get("val_ratio", 0.2),
+            seed=seed,
+            stratify=config.get("stratify", True),
+        )
+        # Merge the two dicts so dataset_kwargs['labels_dict'] covers every ID
+        labels_dict = {**labels_dict, **test_labels_dict}
+    else:
+        # Standard 70/20/10 stratified split
+        train_ids, val_ids, test_ids = create_splits(
+            config["labels_csv"],
+            id_col=config.get("id_col", "new_id"),
+            label_col=config.get("label_col", "label_rines"),
+            train_ratio=config.get("train_ratio", 0.7),
+            val_ratio=config.get("val_ratio", 0.20),
+            test_ratio=config.get("test_ratio", 0.10),
+            seed=seed,
+            stratify=config.get("stratify", True),
+            labels_dict=labels_dict,
+        )
+
+    # Learning-curve knob: truncate the train set to the first N IDs.
+    # Used with train_ids_file (nested stratified order) so that N=400
+    # is a superset of N=200, etc.
+    max_train_lakes = config.get("max_train_lakes")
+    if max_train_lakes is not None and max_train_lakes > 0:
+        print(f"\n--- LEARNING CURVE: capping TRAIN at {max_train_lakes} lakes ---")
+        train_ids = train_ids[:max_train_lakes]
+
+    # Pilot cap: truncate all three splits (for end-to-end smoke tests).
+    max_lakes = config.get("max_lakes")
+    if max_lakes is not None and max_lakes > 0:
+        print(f"\n--- PILOT MODE: capping each split at {max_lakes} lakes ---")
+        train_ids = train_ids[:max_lakes]
+        val_ids = val_ids[:max_lakes]
+        test_ids = test_ids[:max_lakes]
 
     # Build file paths from IDs
     nc_dir = Path(config["nc_dir"])
@@ -434,6 +659,7 @@ def train(config: dict):
         'use_nir': config.get("use_nir", False),
         'use_swir16': config.get("use_swir16", False),
         'use_swir22': config.get("use_swir22", False),
+        'use_mask': not config.get("no_mask", False),
         'band_stats': config.get("band_stats"),
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
     }
@@ -540,8 +766,9 @@ def train(config: dict):
         epoch_start_time = time.time()
 
         accumulation_steps = config.get("accumulation_steps", 1)
-        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps)
-        val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes)
+        amp = config.get("amp", False)
+        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps, amp=amp)
+        val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes, amp=amp)
 
         epoch_time = time.time() - epoch_start_time
         epoch_times.append(epoch_time)
@@ -630,7 +857,7 @@ def train(config: dict):
         model.load_state_dict(torch.load(config["save_path"], map_location=device))
         print("Loaded best model for test evaluation")
 
-    test_loss, test_metrics = evaluate(model, test_loader, criterion, device, num_classes)
+    test_loss, test_metrics = evaluate(model, test_loader, criterion, device, num_classes, amp=config.get("amp", False))
 
     print(f"\nTest Results:")
     print(f"  Loss:      {test_loss:.4f}")
@@ -673,8 +900,13 @@ def train(config: dict):
 def main():
     parser = argparse.ArgumentParser(description="Train LakeDrainageClassifier")
     # Required paths
-    parser.add_argument("--labels_csv", type=str, required=True,
-                        help="Path to labels CSV file")
+    parser.add_argument("--labels_csv", type=str, required=True, nargs='+',
+                        help="Path(s) to labels CSV file(s). For essd_5class "
+                             "mode, multiple files can be merged (union of lakes).")
+    parser.add_argument("--test_labels_csv", type=str, default=None, nargs='+',
+                        help="Optional path(s) to CSV(s) whose lakes form a "
+                             "held-out test set (cross-year baseline). When "
+                             "set, labels_csv is split 80/20 into train/val.")
     parser.add_argument("--nc_dir", type=str, required=True,
                         help="Directory containing lake NC files")
 
@@ -684,8 +916,11 @@ def main():
     parser.add_argument("--label_col", type=str, default="label_rines",
                         help="Column name for labels in CSV")
     parser.add_argument("--label_mode", type=str, default="original",
-                        choices=["original", "ed_split"],
-                        help="Label scheme: 'original' (ND/ED/LD/CD) or 'ed_split' (ND/LD+MD/HF/CD)")
+                        choices=["original", "ed_split", "essd_5class"],
+                        help="Label scheme: 'original' (ND/ED/LD/CD), "
+                             "'ed_split' (ND/LD+MD/HF/CD), or "
+                             "'essd_5class' (ND/HF/MD/LD/CD — reads string labels "
+                             "from the sat-tile-stack GUI CSV)")
     parser.add_argument("--edm_edf_col", type=str, default="edm_edf",
                         help="Column name for moulin/hydrofracture indicator (used with --label_mode ed_split)")
 
@@ -696,8 +931,27 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--use_scheduler", action="store_true",
                         help="Use learning rate scheduler")
+    parser.add_argument("--amp", action="store_true", default=False,
+                        help="Use bf16 mixed-precision autocast for forward/backward "
+                             "(A100+). Halves activation memory, enables larger batch. "
+                             "Input data and model weights stay fp32; only intermediate "
+                             "activations and matmul outputs are bf16.")
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max_lakes", type=int, default=None,
+                        help="Cap each split (train/val/test) at this many lakes. "
+                             "Useful for pilot/smoke-test runs.")
+    parser.add_argument("--max_train_lakes", type=int, default=None,
+                        help="Cap only the train set at this many lakes "
+                             "(learning-curve studies).")
+    parser.add_argument("--train_ids_file", type=str, default=None,
+                        help="Path to JSON list of train lake IDs. Overrides "
+                             "--labels_csv splitting. Must be used with "
+                             "--val_ids_file and --test_ids_file.")
+    parser.add_argument("--val_ids_file", type=str, default=None,
+                        help="Path to JSON list of val lake IDs.")
+    parser.add_argument("--test_ids_file", type=str, default=None,
+                        help="Path to JSON list of test lake IDs.")
 
     # Data configuration
     parser.add_argument("--seq_len", type=int, default=153,
@@ -730,6 +984,8 @@ def main():
                         help="Include SWIR16 band")
     parser.add_argument("--use_swir22", action="store_true", default=False,
                         help="Include SWIR22 band")
+    parser.add_argument("--no_mask", action="store_true", default=False,
+                        help="Disable mask band (required for raw sat-tile-stack NC files)")
 
     # Model architecture
     parser.add_argument("--attention_type", type=str, default="none",
@@ -777,6 +1033,10 @@ def main():
         # Ensure required paths are set
         config["labels_csv"] = args.labels_csv
         config["nc_dir"] = args.nc_dir
+        config["test_labels_csv"] = args.test_labels_csv
+        config["train_ids_file"] = args.train_ids_file
+        config["val_ids_file"] = args.val_ids_file
+        config["test_ids_file"] = args.test_ids_file
 
     train(config)
 

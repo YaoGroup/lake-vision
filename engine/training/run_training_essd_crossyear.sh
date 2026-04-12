@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lakevision
+#SBATCH --job-name=lv_essd_crossyear
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
 #SBATCH --time=24:00:00
@@ -14,70 +14,71 @@
 #SBATCH --mail-user=jrines@stanford.edu
 
 # =============================================================================
-# TRAIN LAKE-VISION CLASSIFIER
+# ESSD BASELINE 2 — CROSS-YEAR (train on 2019, test on 2018)
 # =============================================================================
 #
-# Trains the LakeDrainageClassifier model on lake NC files.
+# Trains the 5-class LakeDrainageClassifier on CW 2019 (80/20 train/val),
+# evaluates on CW 2018 held out entirely. This is the generalization
+# baseline reported in the ESSD paper.
 #
-# PREREQUISITES:
-#   - Lake NC files with cloudy_seq variables (from cloudy-tile inference)
-#   - Labels CSV file with lake IDs and labels
+# PREREQUISITES: same as run_training_essd_combined.sh.
 #
 # USAGE:
-#   sbatch run_training.sh
-#
-# OUTPUT:
-#   Model weights saved to:
-#     /oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/models/
-#
+#   sbatch run_training_essd_crossyear.sh
 # =============================================================================
 
-# Set paths
+set -euo pipefail
+
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
 MODELS_DIR="$SHERLOCK_DIR/models"
 
-# Data paths (source on OAK)
-LABELS_CSV="/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW.csv"
-NC_DIR_OAK="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2019"
+STACKS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks"
+LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
+LABELS_2018="$LABELS_ROOT/labels_CW_2018.csv"
+LABELS_2019="$LABELS_ROOT/labels_CW_2019.csv"
 
-# Model save path
-SAVE_PATH="$MODELS_DIR/lakevision_essd_baseline.pth"
+SAVE_PATH="$MODELS_DIR/lakevision_essd_crossyear.pth"
 
-# Create directories
-mkdir -p "$SHERLOCK_DIR/logs"
-mkdir -p "$MODELS_DIR"
+mkdir -p "$SHERLOCK_DIR/logs" "$MODELS_DIR"
 
-# -------------------------------------------------------------------------
-# Copy training data to node-local SSD ($L_SCRATCH) for fast I/O.
-# OAK is slow for the random read pattern during training (~100-300 MB/s
-# sequential, much worse for random). $L_SCRATCH is NVMe SSD — orders of
-# magnitude faster. Copy takes ~5-10 min for ~120 GB but saves far more
-# over 50 epochs. $L_SCRATCH is automatically cleaned when the job ends.
-# -------------------------------------------------------------------------
+for f in "$LABELS_2018" "$LABELS_2019"; do
+    if [ ! -f "$f" ]; then
+        echo "ERROR: missing labels file $f"
+        exit 1
+    fi
+done
+for d in "$STACKS_ROOT/CW_2018" "$STACKS_ROOT/CW_2019"; do
+    if [ ! -d "$d" ]; then
+        echo "ERROR: missing stack directory $d"
+        exit 1
+    fi
+done
+
 NC_DIR="$L_SCRATCH/nc_data"
 
 echo "=============================================="
-echo "Lake Vision Training (ESSD Baseline)"
+echo "ESSD Baseline 2: Cross-year (train 2019, test 2018)"
 echo "=============================================="
-echo "Labels CSV: $LABELS_CSV"
-echo "NC source:  $NC_DIR_OAK (OAK)"
-echo "NC local:   $NC_DIR (L_SCRATCH)"
+echo "Train/val:  $LABELS_2019 (80/20 split)"
+echo "Test:       $LABELS_2018 (held out)"
+echo "Stacks:     $STACKS_ROOT/CW_{2018,2019}"
+echo "Local SSD:  $NC_DIR"
 echo "Model save: $SAVE_PATH"
 echo "=============================================="
 
 echo ""
-echo "Copying training data to node-local SSD..."
+echo "Copying stacks to node-local SSD..."
 COPY_START=$(date +%s)
 mkdir -p "$NC_DIR"
-rsync -a --info=progress2 "$NC_DIR_OAK/" "$NC_DIR/"
+rsync -a --info=progress2 "$STACKS_ROOT/CW_2018/" "$NC_DIR/"
+rsync -a --info=progress2 "$STACKS_ROOT/CW_2019/" "$NC_DIR/"
 COPY_END=$(date +%s)
 COPY_SEC=$((COPY_END - COPY_START))
 NC_COUNT=$(ls "$NC_DIR/"*.nc 2>/dev/null | wc -l)
 echo "  Copied $NC_COUNT files in ${COPY_SEC}s"
 echo "=============================================="
 
-# Load modules
 ml system
 ml python/3.12.1
 ml py-numpy/1.26.3_py312
@@ -87,19 +88,15 @@ ml py-pytorch/2.2.1_py312
 ml py-torchvision/0.17.1_py312
 ml py-scikit-learn/1.5.1_py312
 
-# Install additional dependencies
 pip install --user xarray netcdf4
 
-# Add repo to PYTHONPATH
 export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
-
-# Wandb offline mode
 export WANDB_MODE=offline
 export WANDB_DIR="$SHERLOCK_DIR"
 export WANDB_PROJECT="lake-vision"
-export WANDB_RUN_GROUP="baseline"
+export WANDB_RUN_GROUP="essd_crossyear"
 
-cd $SHERLOCK_DIR
+cd "$SHERLOCK_DIR"
 
 echo ""
 echo "Starting training..."
@@ -108,23 +105,25 @@ echo ""
 
 START_TIME=$(date +%s)
 
-# Training configuration
-# Adjust these hyperparameters as needed
-# Use -u for unbuffered output so logs appear in real-time
 python3 -u "$REPO_DIR/engine/training/run_training.py" \
-    --labels_csv "$LABELS_CSV" \
+    --labels_csv "$LABELS_2019" \
+    --test_labels_csv "$LABELS_2018" \
     --nc_dir "$NC_DIR" \
-    --id_col "new_id" \
-    --label_col "label_rines" \
+    --label_mode "essd_5class" \
+    --id_col "lake_id" \
+    --label_col "label" \
+    --num_classes 5 \
+    --train_ratio 0.8 \
+    --val_ratio 0.2 \
     --epochs 50 \
-    --batch_size 4 \
+    --batch_size 16 \
+    --amp \
     --lr 1e-4 \
     --weight_decay 1e-5 \
     --use_scheduler \
     --seq_len 153 \
     --no_mask \
     --attention_type "none" \
-    --num_classes 4 \
     --frontcnn_base_channels 8 \
     --frontcnn_num_layers 4 \
     --clstm_hidden 32 \
@@ -146,19 +145,11 @@ DURATION_MIN_REM=$((DURATION_MIN % 60))
 echo ""
 echo "=============================================="
 echo "End time: $(date)"
-echo "Duration: ${DURATION_HR}h ${DURATION_MIN_REM}m (${DURATION_SEC}s total)"
+echo "Duration: ${DURATION_HR}h ${DURATION_MIN_REM}m"
 echo "Exit code: $EXIT_CODE"
-
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "Training completed successfully!"
-    if [ -f "$SAVE_PATH" ]; then
-        echo "Model saved to: $SAVE_PATH"
-        ls -lh "$SAVE_PATH"
-    else
-        echo "WARNING: Model file not found at $SAVE_PATH"
-    fi
-else
-    echo "Training FAILED with exit code $EXIT_CODE"
+if [ $EXIT_CODE -eq 0 ] && [ -f "$SAVE_PATH" ]; then
+    echo "Model saved to: $SAVE_PATH"
+    ls -lh "$SAVE_PATH"
 fi
 echo "=============================================="
 

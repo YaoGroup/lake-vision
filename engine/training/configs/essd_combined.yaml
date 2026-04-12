@@ -1,0 +1,12 @@
+# ESSD Baseline 1 — combined CW 2018 + CW 2019, stratified 70/20/10 split.
+# See essd_baseline.yaml for the canonical config inherited here.
+
+base_config: essd_baseline.yaml
+
+train_ratio: 0.7
+val_ratio: 0.2
+test_ratio: 0.1
+
+# No test_labels_csv — splits are drawn from the union of labels_csv files.
+
+save_path_suffix: combined       # result: lakevision_essd_combined.pth
