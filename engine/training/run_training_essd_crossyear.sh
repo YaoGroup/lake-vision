@@ -122,7 +122,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --val_ids_file "$VAL_IDS" \
     --test_ids_file "$TEST_IDS" \
     --epochs 50 \
-    --batch_size 16 \
+    --batch_size 8 \
     --amp \
     --lr 1e-4 \
     --weight_decay 1e-5 \

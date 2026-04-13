@@ -116,7 +116,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --test_ratio 0.1 \
     --max_lakes 50 \
     --epochs 3 \
-    --batch_size 16 \
+    --batch_size 8 \
     --amp \
     --lr 1e-4 \
     --weight_decay 1e-5 \

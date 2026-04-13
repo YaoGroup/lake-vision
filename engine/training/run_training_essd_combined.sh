@@ -128,7 +128,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --val_ratio 0.2 \
     --test_ratio 0.1 \
     --epochs 50 \
-    --batch_size 16 \
+    --batch_size 8 \
     --amp \
     --lr 1e-4 \
     --weight_decay 1e-5 \

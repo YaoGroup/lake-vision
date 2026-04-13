@@ -20,6 +20,8 @@ num_classes: 5
 # --- Data / sequence ---
 seq_len: 153                     # full May-Sep daily window (no water_area peak centering)
 no_mask: true                    # raw sat-tile-stack NC files have no lake polygon mask
+use_areaseq: false               # imagery-only ESSD baseline — water_area not in raw files
+use_cloudyseq: false             # deferred to JSTARS
 # use_nir, use_swir16, use_swir22 default to False — imagery-only (RGB) baseline for ESSD
 
 # --- Model architecture (base capacity) ---
@@ -32,7 +34,8 @@ classhead_hidden: 64
 classhead_dropout: 0.3
 
 # --- Optimization ---
-batch_size: 16
+batch_size: 8                    # bs=16 + AMP OOMs on 40GB A100 at 512x512 + seq_len=153
+                                 #   (input tensor alone is 14.7 GB at bs=16)
 amp: true                        # bf16 mixed precision on A100
 epochs: 50
 lr: 1.0e-4
