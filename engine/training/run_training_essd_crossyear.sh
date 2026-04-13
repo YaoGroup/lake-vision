@@ -2,7 +2,7 @@
 #SBATCH --job-name=lv_essd_crossyear
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -111,8 +111,7 @@ echo ""
 START_TIME=$(date +%s)
 
 python3 -u "$REPO_DIR/engine/training/run_training.py" \
-    --labels_csv "$LABELS_2019" \
-    --test_labels_csv "$LABELS_2018" \
+    --labels_csv "$LABELS_2019" "$LABELS_2018" \
     --nc_dir "$NC_DIR" \
     --label_mode "essd_5class" \
     --id_col "lake_id" \
@@ -121,6 +120,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --train_ids_file "$TRAIN_IDS" \
     --val_ids_file "$VAL_IDS" \
     --test_ids_file "$TEST_IDS" \
+    --wandb_name "essd_crossyear" \
     --epochs 50 \
     --batch_size 8 \
     --amp \
@@ -132,13 +132,13 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --no_areaseq \
     --attention_type "none" \
     --frontcnn_base_channels 8 \
-    --frontcnn_num_layers 4 \
+    --frontcnn_num_layers 3 \
     --clstm_hidden 32 \
     --slstm_hidden 16 \
     --classhead_hidden 64 \
     --classhead_dropout 0.3 \
     --save_path "$SAVE_PATH" \
-    --num_workers 4 \
+    --num_workers 7 \
     --seed 42
 
 EXIT_CODE=$?

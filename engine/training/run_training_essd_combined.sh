@@ -2,7 +2,7 @@
 #SBATCH --job-name=lv_essd_combined
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -124,6 +124,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --id_col "lake_id" \
     --label_col "label" \
     --num_classes 5 \
+    --wandb_name "essd_combined" \
     --train_ratio 0.7 \
     --val_ratio 0.2 \
     --test_ratio 0.1 \
@@ -138,13 +139,13 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --no_areaseq \
     --attention_type "none" \
     --frontcnn_base_channels 8 \
-    --frontcnn_num_layers 4 \
+    --frontcnn_num_layers 3 \
     --clstm_hidden 32 \
     --slstm_hidden 16 \
     --classhead_hidden 64 \
     --classhead_dropout 0.3 \
     --save_path "$SAVE_PATH" \
-    --num_workers 4 \
+    --num_workers 7 \
     --seed 42
 
 EXIT_CODE=$?
