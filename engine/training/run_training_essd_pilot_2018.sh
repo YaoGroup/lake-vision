@@ -64,7 +64,7 @@ echo "=============================================="
 echo "ESSD Pilot (CW 2018 only) — smoke test"
 echo "=============================================="
 echo "  3 epochs, 50 lakes per split"
-echo "  5-class, imagery-only, no mask, bs=16 + bf16 AMP"
+echo "  5-class, imagery-only, no mask, bs=8 + bf16 AMP"
 echo "=============================================="
 
 echo ""
@@ -123,7 +123,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --no_areaseq \
     --attention_type "none" \
     --frontcnn_base_channels 8 \
-    --frontcnn_num_layers 3 \
+    --frontcnn_num_layers 4 \
     --clstm_hidden 32 \
     --slstm_hidden 16 \
     --classhead_hidden 64 \

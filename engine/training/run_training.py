@@ -755,6 +755,24 @@ def train(config: dict):
 
     # Training loop
     best_val_loss = float("inf")
+    best_val_f1 = -float("inf")
+
+    # Checkpoint paths derived from --save_path.
+    #   <stem>.pth            → best val loss (original behavior)
+    #   <stem>_bestf1.pth     → best val macro F1
+    #   <stem>_epoch{E:03d}.pth → periodic every N epochs
+    _save_path = config.get("save_path")
+    if _save_path:
+        _sp = Path(_save_path)
+        best_loss_path = _sp
+        best_f1_path = _sp.with_name(f"{_sp.stem}_bestf1{_sp.suffix}")
+        def _periodic_path(epoch_1indexed):
+            return _sp.with_name(f"{_sp.stem}_epoch{epoch_1indexed:03d}{_sp.suffix}")
+    else:
+        best_loss_path = best_f1_path = None
+        _periodic_path = lambda e: None
+
+    periodic_every = 5  # save every N epochs
     epochs = config.get("epochs", 50)
     epoch_times = []
     training_start_time = time.time()
@@ -827,12 +845,28 @@ def train(config: dict):
         if WANDB_AVAILABLE and wandb.run is not None:
             wandb.log(log_dict)
 
-        # Save best model
+        # --- Checkpointing ---
+        # 1. Best val loss (canonical checkpoint — kept as the path the user passed)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            if config.get("save_path"):
-                torch.save(model.state_dict(), config["save_path"])
-                print(f"  Saved best model (val_loss={val_loss:.4f})")
+            if best_loss_path is not None:
+                torch.save(model.state_dict(), best_loss_path)
+                print(f"  Saved best-val-loss model (val_loss={val_loss:.4f})")
+
+        # 2. Best val macro F1 (separate file)
+        val_f1 = val_metrics["f1_macro"]
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            if best_f1_path is not None:
+                torch.save(model.state_dict(), best_f1_path)
+                print(f"  Saved best-val-F1 model (val_f1_macro={val_f1:.4f})")
+
+        # 3. Periodic snapshot every N epochs (for post-hoc analysis)
+        epoch_1indexed = epoch + 1
+        if epoch_1indexed % periodic_every == 0 and best_loss_path is not None:
+            periodic = _periodic_path(epoch_1indexed)
+            torch.save(model.state_dict(), periodic)
+            print(f"  Saved periodic snapshot: {periodic.name}")
 
     # Training timing summary
     total_training_time = time.time() - training_start_time
@@ -842,6 +876,7 @@ def train(config: dict):
     print(f"  Total training time: {total_training_time / 3600:.2f} hours ({total_training_time:.1f} seconds)")
     print(f"  Average epoch time:  {avg_epoch_time:.1f} seconds")
     print(f"  Best val loss:       {best_val_loss:.4f}")
+    print(f"  Best val F1 (macro): {best_val_f1:.4f}")
     print("=" * 70)
 
     # Final test evaluation
@@ -891,6 +926,7 @@ def train(config: dict):
             "test_f1_macro": test_metrics["f1_macro"],
         })
         wandb.summary["best_val_loss"] = best_val_loss
+        wandb.summary["best_val_f1_macro"] = best_val_f1
         wandb.summary["test_acc"] = test_metrics["accuracy"]
         wandb.summary["test_f1_macro"] = test_metrics["f1_macro"]
 
