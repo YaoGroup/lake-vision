@@ -70,7 +70,7 @@ echo ""
 echo "Copying training data to node-local SSD..."
 COPY_START=$(date +%s)
 mkdir -p "$NC_DIR"
-rsync -a --info=progress2 "$NC_DIR_OAK/" "$NC_DIR/"
+rsync -a "$NC_DIR_OAK/" "$NC_DIR/"
 COPY_END=$(date +%s)
 COPY_SEC=$((COPY_END - COPY_START))
 NC_COUNT=$(ls "$NC_DIR/"*.nc 2>/dev/null | wc -l)

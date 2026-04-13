@@ -953,6 +953,16 @@ def main():
     parser.add_argument("--test_ids_file", type=str, default=None,
                         help="Path to JSON list of test lake IDs.")
 
+    # Split configuration (ignored when --train_ids_file etc. are set)
+    parser.add_argument("--train_ratio", type=float, default=0.7,
+                        help="Fraction of labeled lakes used for training "
+                             "(crossyear mode defaults to 0.8).")
+    parser.add_argument("--val_ratio", type=float, default=0.2)
+    parser.add_argument("--test_ratio", type=float, default=0.1,
+                        help="Ignored in crossyear mode.")
+    parser.add_argument("--no_stratify", action="store_true", default=False,
+                        help="Disable class-stratified splitting.")
+
     # Data configuration
     parser.add_argument("--seq_len", type=int, default=153,
                         help="Sequence length for temporal window")
@@ -1020,6 +1030,9 @@ def main():
 
     args = parser.parse_args()
     config = vars(args)
+    # Translate --no_stratify (action flag) to config["stratify"] so existing
+    # code that reads config.get("stratify", True) keeps working.
+    config["stratify"] = not config.pop("no_stratify", False)
 
     # Initialize wandb
     if WANDB_AVAILABLE and not args.no_wandb:
