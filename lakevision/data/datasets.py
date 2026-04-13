@@ -241,20 +241,41 @@ class LakeDataset(Dataset):
         """
         ds = xr.open_dataset(fp)
 
-        # --- Auto-detect format ---
+        # --- Auto-detect format and subset bands BEFORE materializing ---
+        # Reading `.values` on the full [T, 7, 512, 512] array pulls ~1 GB
+        # per lake into RAM; with num_workers>1 that kills the job. Subset
+        # the band dimension first so only the channels we actually need
+        # hit memory.
         if 'imagery' in ds:
             # Preprocessed format: imagery [T, channel, H, W]
-            all_imagery = ds['imagery'].values
-            nc_channels = list(ds.coords['channel'].values)
+            imagery_da = ds['imagery']
+            nc_channels_all = [str(c) for c in ds.coords['channel'].values]
         elif 'reflectance' in ds:
             # Raw sat-tile-stack format: reflectance [T, band, H, W]
-            all_imagery = ds['reflectance'].values
-            # Map band names to canonical channel names
-            raw_bands = list(ds.coords['band'].values)
-            nc_channels = [self.BAND_TO_CHANNEL.get(b, b) for b in raw_bands]
+            imagery_da = ds['reflectance']
+            raw_bands = [str(b) for b in ds.coords['band'].values]
+            # Map band names (B04, B03, ...) to canonical names (red, green, ...)
+            nc_channels_all = [self.BAND_TO_CHANNEL.get(b, b) for b in raw_bands]
         else:
             ds.close()
             raise ValueError(f"NC file {fp} has neither 'imagery' nor 'reflectance' variable")
+
+        # Pick the band indices we want
+        channel_indices = []
+        for ch in self.channels_to_load:
+            if ch in nc_channels_all:
+                channel_indices.append(nc_channels_all.index(ch))
+            else:
+                ds.close()
+                raise ValueError(
+                    f"Channel '{ch}' not found in NC file {fp}. "
+                    f"Available: {nc_channels_all}"
+                )
+
+        # Lazy subset along the band dim, then materialize — uses ~C/Nband
+        # of the full-file memory.
+        band_dim = imagery_da.dims[1]  # 'channel' or 'band'
+        imagery = imagery_da.isel({band_dim: channel_indices}).values
 
         # Water area (may not exist in raw format)
         water_area = ds['water_area'].values if 'water_area' in ds else None
@@ -268,18 +289,6 @@ class LakeDataset(Dataset):
         lake_id = ds.attrs.get('lake_id', fp.stem)
         ds.close()
 
-        # Select only the channels we want
-        channel_indices = []
-        for ch in self.channels_to_load:
-            if ch in nc_channels:
-                channel_indices.append(nc_channels.index(ch))
-            else:
-                raise ValueError(
-                    f"Channel '{ch}' not found in NC file {fp}. "
-                    f"Available: {nc_channels}"
-                )
-
-        imagery = all_imagery[:, channel_indices, :, :]
         return imagery, water_area, cloudy_seq_data, lake_id
 
     def __getitem__(self, idx):

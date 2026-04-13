@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64GB
+#SBATCH --mem=128GB
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -129,6 +129,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --use_scheduler \
     --seq_len 153 \
     --no_mask \
+    --no_areaseq \
     --attention_type "none" \
     --frontcnn_base_channels 8 \
     --frontcnn_num_layers 4 \
