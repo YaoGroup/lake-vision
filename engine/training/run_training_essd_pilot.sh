@@ -36,7 +36,7 @@ set -euo pipefail
 
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
-MODELS_DIR="$SHERLOCK_DIR/models"
+MODELS_DIR="$SHERLOCK_DIR/models/essd/pilot"
 
 STACKS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks"
 LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
