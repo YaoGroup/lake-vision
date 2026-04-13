@@ -3,7 +3,7 @@
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
 #SBATCH --time=02:00:00
-#SBATCH -p serc,normal
+#SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
