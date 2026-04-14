@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lv_essd_crossyear
+#SBATCH --job-name=lv_essd_crossyear_io
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
 #SBATCH --time=60:00:00
@@ -14,30 +14,24 @@
 #SBATCH --mail-user=jrines@stanford.edu
 
 # =============================================================================
-# ESSD BASELINE 2 — CROSS-YEAR
+# ESSD ABLATION — CROSS-YEAR, IMAGERY-ONLY
 # =============================================================================
 #
-# Canonical ESSD cross-year baseline: train+val on CW 2019 (80/20 from
-# committed split files), test held out entirely on CW 2018. Uses the
-# same imagery + water_area + cloudy_seq_rgb + static mask composite
-# inputs and the same 5-class model as the combined baseline (run_training.py
-# argparse defaults — see that file for the canonical configuration).
-#
-# PREREQUISITES:
-#   - Composite .nc files at $COMPOSITES_ROOT/CW_{2018,2019}/
-#   - Fixed splits at $SPLITS_DIR (committed to repo)
+# Ablation of run_training_essd_crossyear.sh: disables water_area,
+# cloudy_seq_rgb, and lake polygon mask streams (raw RGB imagery only).
+# Reads from raw sat-tile-stack output, not composites.
 #
 # USAGE:
-#   sbatch run_training_essd_crossyear.sh
+#   sbatch run_training_essd_crossyear_imageryonly.sh
 # =============================================================================
 
 set -euo pipefail
 
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
-MODELS_DIR="$SHERLOCK_DIR/models/essd/crossyear"
+MODELS_DIR="$SHERLOCK_DIR/models/essd/crossyear_imageryonly"
 
-COMPOSITES_ROOT="$SHERLOCK_DIR/composites"
+STACKS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks"
 LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
 LABELS_2018="$LABELS_ROOT/labels_CW_2018.csv"
 LABELS_2019="$LABELS_ROOT/labels_CW_2019.csv"
@@ -47,39 +41,33 @@ TRAIN_IDS="$SPLITS_DIR/train_ids.json"
 VAL_IDS="$SPLITS_DIR/val_ids.json"
 TEST_IDS="$SPLITS_DIR/test_ids.json"
 
-SAVE_PATH="$MODELS_DIR/lakevision_essd_crossyear.pth"
+SAVE_PATH="$MODELS_DIR/lakevision_essd_crossyear_imageryonly.pth"
 
 mkdir -p "$SHERLOCK_DIR/logs" "$MODELS_DIR"
 
 for f in "$LABELS_2018" "$LABELS_2019" "$TRAIN_IDS" "$VAL_IDS" "$TEST_IDS"; do
-    if [ ! -f "$f" ]; then
-        echo "ERROR: missing file $f"
-        exit 1
-    fi
+    [ -f "$f" ] || { echo "ERROR: missing file $f"; exit 1; }
 done
-for d in "$COMPOSITES_ROOT/CW_2018" "$COMPOSITES_ROOT/CW_2019"; do
-    if [ ! -d "$d" ]; then
-        echo "ERROR: missing composites directory $d"
-        exit 1
-    fi
+for d in "$STACKS_ROOT/CW_2018" "$STACKS_ROOT/CW_2019"; do
+    [ -d "$d" ] || { echo "ERROR: missing stacks directory $d"; exit 1; }
 done
 
 NC_DIR="$L_SCRATCH/nc_data"
 
 echo "=============================================="
-echo "ESSD Baseline 2: Cross-year (train 2019, test 2018)"
+echo "ESSD Ablation: Cross-year (imagery-only)"
 echo "=============================================="
-echo "Composites: $COMPOSITES_ROOT/CW_{2018,2019}"
+echo "Stacks:     $STACKS_ROOT/CW_{2018,2019}"
 echo "Local SSD:  $NC_DIR"
 echo "Model save: $SAVE_PATH"
 echo "=============================================="
 
 echo ""
-echo "Copying composites to node-local SSD..."
+echo "Copying raw stacks to node-local SSD..."
 COPY_START=$(date +%s)
 mkdir -p "$NC_DIR"
-rsync -a "$COMPOSITES_ROOT/CW_2018/" "$NC_DIR/"
-rsync -a "$COMPOSITES_ROOT/CW_2019/" "$NC_DIR/"
+rsync -a "$STACKS_ROOT/CW_2018/" "$NC_DIR/"
+rsync -a "$STACKS_ROOT/CW_2019/" "$NC_DIR/"
 COPY_END=$(date +%s)
 NC_COUNT=$(ls "$NC_DIR/"*.nc 2>/dev/null | wc -l)
 echo "  Copied $NC_COUNT files in $((COPY_END - COPY_START))s"
@@ -92,7 +80,7 @@ export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
 export WANDB_MODE=offline
 export WANDB_DIR="$SHERLOCK_DIR"
 export WANDB_PROJECT="lake-vision"
-export WANDB_RUN_GROUP="essd_crossyear"
+export WANDB_RUN_GROUP="essd_crossyear_imageryonly"
 
 cd "$SHERLOCK_DIR"
 
@@ -107,7 +95,8 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --train_ids_file "$TRAIN_IDS" \
     --val_ids_file "$VAL_IDS" \
     --test_ids_file "$TEST_IDS" \
-    --wandb_name "essd_crossyear" \
+    --no_areaseq --no_cloudyseq --no_mask \
+    --wandb_name "essd_crossyear_imageryonly" \
     --save_path "$SAVE_PATH"
 
 EXIT_CODE=$?

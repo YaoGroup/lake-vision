@@ -474,6 +474,7 @@ def train(config: dict):
     print(f"Batch size:     {config.get('batch_size', 4)}")
     print(f"Learning rate:  {config.get('lr', 1e-4)}")
     print(f"Weight decay:   {config.get('weight_decay', 0.0)}")
+    print(f"LR:             {config.get('lr', 1e-4)}")
     print(f"Scheduler:      {config.get('use_scheduler', False)}")
     print(f"Num workers:    {config.get('num_workers', 4)}")
 
@@ -746,7 +747,8 @@ def train(config: dict):
         weight_decay=config.get("weight_decay", 0.0),
     )
 
-    # Learning rate scheduler
+    # ESSD baseline uses a fixed learning rate (no scheduler) by default.
+    # The --use_scheduler flag remains available for ablation experiments.
     scheduler = None
     if config.get("use_scheduler", False):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -946,33 +948,47 @@ def main():
     parser.add_argument("--nc_dir", type=str, required=True,
                         help="Directory containing lake NC files")
 
+    # -------------------------------------------------------------------
+    # ESSD baseline defaults
+    #
+    # Defaults below are hard-coded to the canonical ESSD baseline so the
+    # SLURM scripts can stay short and the paper can cite "default values"
+    # without a long qualifier. Override explicitly via CLI for ablations.
+    #
+    # 5-class schema (ND/HF/MD/LD/CD), 200 epochs, bs=8, bf16 AMP,
+    # lr=1e-4 fixed (no scheduler), imgseq+areaseq+cloudyseq+mask active,
+    # attention off, 4-layer FrontCNN. Seed 42 throughout.
+    # -------------------------------------------------------------------
+
     # Label configuration
-    parser.add_argument("--id_col", type=str, default="new_id",
+    parser.add_argument("--id_col", type=str, default="lake_id",
                         help="Column name for lake IDs in CSV")
-    parser.add_argument("--label_col", type=str, default="label_rines",
+    parser.add_argument("--label_col", type=str, default="label",
                         help="Column name for labels in CSV")
-    parser.add_argument("--label_mode", type=str, default="original",
+    parser.add_argument("--label_mode", type=str, default="essd_5class",
                         choices=["original", "ed_split", "essd_5class"],
                         help="Label scheme: 'original' (ND/ED/LD/CD), "
                              "'ed_split' (ND/LD+MD/HF/CD), or "
                              "'essd_5class' (ND/HF/MD/LD/CD — reads string labels "
-                             "from the sat-tile-stack GUI CSV)")
+                             "from the sat-tile-stack GUI CSV; ESSD default)")
     parser.add_argument("--edm_edf_col", type=str, default="edm_edf",
                         help="Column name for moulin/hydrofracture indicator (used with --label_mode ed_split)")
 
     # Training hyperparameters
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--use_scheduler", action="store_true",
-                        help="Use learning rate scheduler")
-    parser.add_argument("--amp", action="store_true", default=False,
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-4,
+                        help="Fixed learning rate (no scheduler in ESSD baseline)")
+    parser.add_argument("--weight_decay", type=float, default=1e-5)
+    parser.add_argument("--amp", action="store_true", default=True,
                         help="Use bf16 mixed-precision autocast for forward/backward "
-                             "(A100+). Halves activation memory, enables larger batch. "
-                             "Input data and model weights stay fp32; only intermediate "
-                             "activations and matmul outputs are bf16.")
-    parser.add_argument("--num_workers", type=int, default=4)
+                             "(A100+). Default True for ESSD baseline.")
+    parser.add_argument("--no_amp", action="store_false", dest="amp",
+                        help="Disable bf16 AMP (forces fp32 training)")
+    parser.add_argument("--use_scheduler", action="store_true",
+                        help="Enable ReduceLROnPlateau LR scheduler "
+                             "(off by default in ESSD baseline).")
+    parser.add_argument("--num_workers", type=int, default=7)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_lakes", type=int, default=None,
                         help="Cap each split (train/val/test) at this many lakes. "
@@ -1018,8 +1034,10 @@ def main():
                         help="Use water area sequence")
     parser.add_argument("--no_areaseq", action="store_false", dest="use_areaseq",
                         help="Disable water area sequence")
-    parser.add_argument("--use_cloudyseq", action="store_true", default=False,
-                        help="Use cloudy sequence")
+    parser.add_argument("--use_cloudyseq", action="store_true", default=True,
+                        help="Use cloudy sequence (default True for ESSD baseline)")
+    parser.add_argument("--no_cloudyseq", action="store_false", dest="use_cloudyseq",
+                        help="Disable cloudy sequence")
     parser.add_argument("--learn_area_weights", action="store_true", default=False,
                         help="Learn per-timestep weights for area_seq")
     parser.add_argument("--learn_cloudy_weights", action="store_true", default=False,
@@ -1037,14 +1055,14 @@ def main():
     parser.add_argument("--attention_type", type=str, default="none",
                         choices=["none", "spatial", "full", "arch"],
                         help="Attention mechanism type")
-    parser.add_argument("--num_classes", type=int, default=4,
-                        help="Number of output classes")
+    parser.add_argument("--num_classes", type=int, default=5,
+                        help="Number of output classes (default 5 for ESSD baseline)")
     parser.add_argument("--frontcnn_base_channels", type=int, default=8)
     parser.add_argument("--frontcnn_num_layers", type=int, default=4)
     parser.add_argument("--clstm_hidden", type=int, default=32)
     parser.add_argument("--slstm_hidden", type=int, default=16)
     parser.add_argument("--classhead_hidden", type=int, default=64)
-    parser.add_argument("--classhead_dropout", type=float, default=0.0)
+    parser.add_argument("--classhead_dropout", type=float, default=0.3)
 
     # Memory optimization
     parser.add_argument("--gradient_checkpointing", action="store_true", default=False,
