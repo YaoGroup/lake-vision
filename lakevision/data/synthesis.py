@@ -18,7 +18,11 @@ Dimensions:
 Data variables:
     imagery        (time, channel, y, x)  float32
                     [red, green, blue, nir, swir16, cloudmask_scl, mask]
-                    Reflectance bands are sat-tile-stack raw / 10000 (CF units='1').
+                    Reflectance bands stored as raw Sentinel-2 L2A scaled DN
+                    (reflectance × 10000), matching both the cloudy-tile
+                    training stats and the LakeDataset's legacy 'imagery_scale'
+                    convention. Downstream users divide by 10000 (or apply
+                    band_stats normalization) at training time.
                     cloudmask_scl is binary 0/1 (SCL-derived per-pixel cloud flag).
                     mask is binary 0/1 (Dunmire polygon rasterized, broadcast over T).
     water_area     (time,)                float32
@@ -250,9 +254,10 @@ class LakeDatasetSynthesizer:
         """Extract and rename the 5 reflectance bands + SCL-derived cloudmask.
 
         Returns a dict mapping channel_name → np.ndarray [T, H, W].
-        Reflectance channels are scaled /10000 and cast to float32.
-        ``cloudmask_scl`` stays binary 0/1 (cast to float32 for consistent
-        channel dtype in the final [T, C, H, W] tensor).
+        Reflectance channels are stored **unscaled** (raw Sentinel-2 scaled
+        DN, i.e. reflectance × 10000) to match both the cloudy-tile band
+        statistics and the LakeDataset's legacy imagery_scale convention.
+        ``cloudmask_scl`` stays binary 0/1.
         """
         raw_bands = list(self._raw_ds['reflectance'].coords['band'].values)
         refl = self._raw_ds['reflectance'].values  # [T, band, H, W]
@@ -264,7 +269,7 @@ class LakeDatasetSynthesizer:
                     f"Expected band '{band_name}' not in raw .nc. Found: {raw_bands}"
                 )
             idx = raw_bands.index(band_name)
-            out[channel_name] = (refl[:, idx, :, :] / REFLECTANCE_SCALE).astype(np.float32)
+            out[channel_name] = refl[:, idx, :, :].astype(np.float32)
 
         # cloudmask (renamed cloudmask_scl in the composite schema)
         if 'cloudmask' in raw_bands:
@@ -344,12 +349,17 @@ class LakeDatasetSynthesizer:
                 'long_name': 'multispectral imagery time series',
                 'units': '1',
                 'description': (
-                    'Surface reflectance bands (red/green/blue/nir/swir16) scaled '
-                    '/10000 from Sentinel-2 L2A raw DN; cloudmask_scl is the '
-                    'Sen2Cor SCL-derived per-pixel cloud flag (0=clear,1=cloudy); '
-                    'mask is the Dunmire+ 2025 static lake polygon rasterized '
-                    'and broadcast across the time dimension (0=off-lake,1=on-lake).'
+                    'Raw Sentinel-2 L2A scaled digital number (reflectance '
+                    'multiplied by 10000) for reflectance bands '
+                    '(red/green/blue/nir/swir16). Users divide by 10000 (or '
+                    'apply per-band mean/std normalization via band_stats) '
+                    'at training time. cloudmask_scl is the Sen2Cor '
+                    'SCL-derived per-pixel cloud flag (0=clear,1=cloudy). '
+                    'mask is the Dunmire+ 2025 static lake polygon '
+                    'rasterized and broadcast across the time dimension '
+                    '(0=off-lake,1=on-lake).'
                 ),
+                'imagery_scale': 10000.0,
                 'coordinates': 'time channel band y x',
                 'grid_mapping': 'crs',
                 '_FillValue': np.float32(np.nan),
