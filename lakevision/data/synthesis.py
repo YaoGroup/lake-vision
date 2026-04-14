@@ -366,9 +366,12 @@ class LakeDatasetSynthesizer:
         end = f'{self.year}-09-30'
         # Slice time first (avoid pulling full-year per lake)
         sliced = self.dunmire_area_ds.sel(time=slice(start, end))
-        # Extract this lake's series
-        area, _ = get_lake_water_area(sliced, self.lake_id, variable='S2_water',
-                                     fill_nans=True, fill_method='ffill_bfill')
+        # Extract this lake's series.
+        # get_lake_water_area returns (time_coords, water_area) — we want #2.
+        _time, area = get_lake_water_area(
+            sliced, self.lake_id, variable='S2_water',
+            fill_nans=True, fill_method='ffill_bfill',
+        )
         return area.astype(np.float32)
 
     def _assemble_dataset(self) -> xr.Dataset:
