@@ -130,18 +130,29 @@ def _rasterize_polygon_to_grid(
 def _build_affine_from_raw(raw_ds: xr.Dataset):
     """Reconstruct an affine.Affine from the raw sat-tile-stack dataset.
 
-    sat-tile-stack writes the transform as a 9-element list in the
-    ``transform`` global attribute (see ``sat_tile_stack.io``).
+    Derives the transform from the ``x`` and ``y`` coordinate arrays
+    directly. sat-tile-stack writes a pre-crop 1.1x oversized transform
+    in the ``transform`` global attribute, which drifts out of sync
+    with the final 512x512 cropped grid; using that attr results in
+    a ~540 m polygon rasterization offset. The x/y coord arrays are
+    ground-truth for the on-disk pixel grid, so we use those.
+
+    Returns an affine mapping pixel (col, row) -> UTM (x, y) where
+    (col=0, row=0) is the upper-left pixel's CENTER. rasterio's
+    ``rasterize`` handles pixel-center vs pixel-corner internally,
+    so no ±pixel/2 shift is needed.
     """
     from affine import Affine
 
-    t = raw_ds.attrs.get('transform')
-    if t is None:
-        raise ValueError("raw .nc is missing global 'transform' attribute; "
-                         "cannot reconstruct affine")
-    # Expected: [a, b, c, d, e, f, 0, 0, 1]
-    t = list(t)
-    return Affine(t[0], t[1], t[2], t[3], t[4], t[5])
+    x = raw_ds['x'].values
+    y = raw_ds['y'].values
+    dx = float(x[1] - x[0])
+    dy = float(y[1] - y[0])
+    # rasterio expects the transform to map pixel-upper-left corner,
+    # so shift origin by half a pixel from the x[0]/y[0] pixel-centers.
+    x0 = float(x[0]) - dx / 2.0
+    y0 = float(y[0]) - dy / 2.0
+    return Affine(dx, 0.0, x0, 0.0, dy, y0)
 
 
 def _labels_to_attrs(label_row: Optional[pd.Series]) -> dict:
