@@ -703,7 +703,11 @@ def train(config: dict):
     # RAM = workers × prefetch_factor × batch_size × ~640 MB.
     # At 16 workers × 2 × 8 × 640 MB ≈ 164 GB queued; sized for --mem=256GB.
     # pin_memory=True enables async host→GPU transfer (overlap with compute).
-    # persistent_workers=True avoids worker spin-up tax each epoch.
+    # persistent_workers MUST be False here: with separate train/val loaders,
+    # persistence keeps train workers alive while val workers spawn — doubling
+    # to 32 worker processes (~350 GB peak) and OOM-killing the job at the
+    # train→val transition. The ~5–10s/epoch worker spin-up tax is the cost
+    # of safety.
     num_workers = config.get("num_workers", 16)
     train_loader = DataLoader(
         train_dataset,
@@ -712,7 +716,7 @@ def train(config: dict):
         num_workers=num_workers,
         pin_memory=True,
         prefetch_factor=2 if num_workers > 0 else None,
-        persistent_workers=num_workers > 0,
+        persistent_workers=False,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -721,7 +725,7 @@ def train(config: dict):
         num_workers=num_workers,
         pin_memory=True,
         prefetch_factor=2 if num_workers > 0 else None,
-        persistent_workers=num_workers > 0,
+        persistent_workers=False,
     )
 
     # Create model
