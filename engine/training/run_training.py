@@ -701,14 +701,14 @@ def train(config: dict):
     # Create loaders.
     # Per-sample img_seq is ~640 MB (153 timesteps × 4 channels × 512² × float32).
     # RAM = workers × prefetch_factor × batch_size × ~640 MB.
-    # At 16 workers × 2 × 8 × 640 MB ≈ 164 GB queued; sized for --mem=256GB.
+    # At 12 workers × 2 × 8 × 640 MB ≈ 123 GB queued; sized for --mem=256GB
+    # with ~35% headroom for transient peaks + glibc fragmentation.
     # pin_memory=True enables async host→GPU transfer (overlap with compute).
     # persistent_workers MUST be False here: with separate train/val loaders,
     # persistence keeps train workers alive while val workers spawn — doubling
-    # to 32 worker processes (~350 GB peak) and OOM-killing the job at the
-    # train→val transition. The ~5–10s/epoch worker spin-up tax is the cost
-    # of safety.
-    num_workers = config.get("num_workers", 16)
+    # worker processes and OOM-killing the job at the train→val transition.
+    # The ~5–10s/epoch worker spin-up tax is the cost of safety.
+    num_workers = config.get("num_workers", 12)
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.get("batch_size", 4),
@@ -1015,11 +1015,12 @@ def main():
     parser.add_argument("--use_scheduler", action="store_true",
                         help="Enable ReduceLROnPlateau LR scheduler "
                              "(off by default in ESSD baseline).")
-    parser.add_argument("--num_workers", type=int, default=16,
+    parser.add_argument("--num_workers", type=int, default=12,
                         help="DataLoader workers. Each worker buffers prefetch_factor "
                              "× batch_size samples (~640 MB each), so RAM grows as "
-                             "workers × prefetch × batch × 640MB. Default 16 paired "
-                             "with --cpus-per-task=16 and --mem=256GB in the SLURM script.")
+                             "workers × prefetch × batch × 640MB. Default 12 paired "
+                             "with --cpus-per-task=16 and --mem=256GB; gives ~35%% "
+                             "headroom and saturates the GPU.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_lakes", type=int, default=None,
                         help="Cap each split (train/val/test) at this many lakes. "
