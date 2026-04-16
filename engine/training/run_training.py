@@ -469,36 +469,38 @@ def train(config: dict):
     print(f"Band stats:     {config.get('band_stats', 'None')}")
     print(f"Save path:      {config.get('save_path', 'None')}")
 
+    # Defaults below MUST match the argparse defaults in main(); when called
+    # from CLI, every key is already populated by argparse so the .get fallback
+    # is dead code, but keeping them in sync prevents future drift.
     print("\n--- TRAINING HYPERPARAMETERS ---")
-    print(f"Epochs:         {config.get('epochs', 50)}")
-    print(f"Batch size:     {config.get('batch_size', 4)}")
+    print(f"Epochs:         {config.get('epochs', 200)}")
+    print(f"Batch size:     {config.get('batch_size', 8)}")
     print(f"Learning rate:  {config.get('lr', 1e-4)}")
-    print(f"Weight decay:   {config.get('weight_decay', 0.0)}")
-    print(f"LR:             {config.get('lr', 1e-4)}")
+    print(f"Weight decay:   {config.get('weight_decay', 1e-5)}")
+    print(f"AMP (bf16):     {config.get('amp', True)}")
     print(f"Scheduler:      {config.get('use_scheduler', False)}")
-    print(f"Num workers:    {config.get('num_workers', 4)}")
+    print(f"Num workers:    {config.get('num_workers', 2)}")
 
     print("\n--- INPUT STREAMS ---")
     print(f"use_imgseq:     {config.get('use_imgseq', True)}")
     print(f"use_areaseq:    {config.get('use_areaseq', True)}")
-    print(f"use_cloudyseq:  {config.get('use_cloudyseq', False)}")
+    print(f"use_cloudyseq:  {config.get('use_cloudyseq', True)}")
     print(f"cloudy_seq_var: {config.get('cloudy_seq_var', 'cloudy_seq_rgb')}")
 
     print("\n--- SPECTRAL BANDS ---")
     print(f"use_nir:        {config.get('use_nir', False)}")
     print(f"use_swir16:     {config.get('use_swir16', False)}")
-    print(f"use_swir22:     {config.get('use_swir22', False)}")
 
     print("\n--- MODEL ARCHITECTURE ---")
     print(f"seq_len:              {config.get('seq_len', 153)}")
-    print(f"num_classes:          {config.get('num_classes', 4)}")
+    print(f"num_classes:          {config.get('num_classes', 5)}")
     print(f"attention_type:       {config.get('attention_type', 'none')}")
     print(f"frontcnn_base_ch:     {config.get('frontcnn_base_channels', 8)}")
     print(f"frontcnn_num_layers:  {config.get('frontcnn_num_layers', 4)}")
     print(f"clstm_hidden:         {config.get('clstm_hidden', 32)}")
     print(f"slstm_hidden:         {config.get('slstm_hidden', 16)}")
     print(f"classhead_hidden:     {config.get('classhead_hidden', 64)}")
-    print(f"classhead_dropout:    {config.get('classhead_dropout', 0.0)}")
+    print(f"classhead_dropout:    {config.get('classhead_dropout', 0.3)}")
     print(f"learn_area_weights:   {config.get('learn_area_weights', False)}")
     print(f"learn_cloudy_weights: {config.get('learn_cloudy_weights', False)}")
     print(f"grad_checkpointing:   {config.get('gradient_checkpointing', False)}")
@@ -659,11 +661,20 @@ def train(config: dict):
         'seq_len': config.get("seq_len", 153),
         'use_nir': config.get("use_nir", False),
         'use_swir16': config.get("use_swir16", False),
-        'use_swir22': config.get("use_swir22", False),
         'use_mask': not config.get("no_mask", False),
         'band_stats': config.get("band_stats"),
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
     }
+
+    # Print the channel list once (was printed 3x by LakeDataset.__init__).
+    channels_to_load = ['red', 'green', 'blue']
+    if dataset_kwargs['use_nir']:
+        channels_to_load.append('nir')
+    if dataset_kwargs['use_swir16']:
+        channels_to_load.append('swir16')
+    if dataset_kwargs['use_mask']:
+        channels_to_load.append('mask')
+    print(f"\nLoading {len(channels_to_load)} channels from NC files: {channels_to_load}")
 
     # Pass labels: use remapped dict if available, otherwise read from CSV
     if labels_dict is not None:
@@ -724,7 +735,6 @@ def train(config: dict):
         seq_len=seq_len,
         use_nir=config.get("use_nir", False),
         use_swir16=config.get("use_swir16", False),
-        use_swir22=config.get("use_swir22", False),
         attention_type=config.get("attention_type", "none"),
         num_classes=num_classes,
         frontcnn_base_channels=config.get("frontcnn_base_channels", 8),
@@ -1061,8 +1071,6 @@ def main():
                         help="Include NIR band")
     parser.add_argument("--use_swir16", action="store_true", default=False,
                         help="Include SWIR16 band")
-    parser.add_argument("--use_swir22", action="store_true", default=False,
-                        help="Include SWIR22 band")
     parser.add_argument("--no_mask", action="store_true", default=False,
                         help="Disable mask band (required for raw sat-tile-stack NC files)")
 
