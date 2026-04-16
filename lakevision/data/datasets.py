@@ -4,7 +4,7 @@ PyTorch Dataset classes for lake drainage classification.
 import json
 import torch
 from torch.utils.data import Dataset
-import xarray as xr
+import netCDF4
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -238,56 +238,64 @@ class LakeDataset(Dataset):
 
         Returns (imagery, water_area, cloudy_seq_data, lake_id) where
         imagery is [T, C_selected, H, W] and water_area/cloudy_seq may be None.
+
+        Uses netCDF4 directly (not xarray) because xarray's open_dataset +
+        .isel().values path adds ~2x peak memory and per-file overhead. The
+        imagery variable is HDF5-chunked along the channel axis with size 1
+        (chunks [51, 1, 171, 171]), so a hyperslab read on selected channels
+        only decompresses the chunks we need.
         """
-        ds = xr.open_dataset(fp)
+        with netCDF4.Dataset(str(fp)) as nc:
+            nc.set_auto_mask(False)  # NaN-fill is already encoded; skip MaskedArray wrap
 
-        # --- Auto-detect format and subset bands BEFORE materializing ---
-        # Reading `.values` on the full [T, 7, 512, 512] array pulls ~1 GB
-        # per lake into RAM; with num_workers>1 that kills the job. Subset
-        # the band dimension first so only the channels we actually need
-        # hit memory.
-        if 'imagery' in ds:
-            # Preprocessed format: imagery [T, channel, H, W]
-            imagery_da = ds['imagery']
-            nc_channels_all = [str(c) for c in ds.coords['channel'].values]
-        elif 'reflectance' in ds:
-            # Raw sat-tile-stack format: reflectance [T, band, H, W]
-            imagery_da = ds['reflectance']
-            raw_bands = [str(b) for b in ds.coords['band'].values]
-            # Map band names (B04, B03, ...) to canonical names (red, green, ...)
-            nc_channels_all = [self.BAND_TO_CHANNEL.get(b, b) for b in raw_bands]
-        else:
-            ds.close()
-            raise ValueError(f"NC file {fp} has neither 'imagery' nor 'reflectance' variable")
+            def _decode(v):
+                # netCDF4 returns either numpy.str_ (NC4 string) or bytes (char array)
+                return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
 
-        # Pick the band indices we want
-        channel_indices = []
-        for ch in self.channels_to_load:
-            if ch in nc_channels_all:
-                channel_indices.append(nc_channels_all.index(ch))
+            # --- Auto-detect format ---
+            if 'imagery' in nc.variables:
+                # Preprocessed format: imagery [T, channel, H, W]
+                var_name = 'imagery'
+                coord_name = 'channel'
+                nc_channels_all = [_decode(c) for c in nc.variables[coord_name][:]]
+            elif 'reflectance' in nc.variables:
+                # Raw sat-tile-stack format: reflectance [T, band, H, W]
+                var_name = 'reflectance'
+                coord_name = 'band'
+                raw_bands = [_decode(b) for b in nc.variables[coord_name][:]]
+                # Map band names (B04, B03, ...) to canonical names (red, green, ...)
+                nc_channels_all = [self.BAND_TO_CHANNEL.get(b, b) for b in raw_bands]
             else:
-                ds.close()
                 raise ValueError(
-                    f"Channel '{ch}' not found in NC file {fp}. "
-                    f"Available: {nc_channels_all}"
+                    f"NC file {fp} has neither 'imagery' nor 'reflectance' variable"
                 )
 
-        # Lazy subset along the band dim, then materialize — uses ~C/Nband
-        # of the full-file memory.
-        band_dim = imagery_da.dims[1]  # 'channel' or 'band'
-        imagery = imagery_da.isel({band_dim: channel_indices}).values
+            # Pick the band indices we want
+            channel_indices = []
+            for ch in self.channels_to_load:
+                if ch in nc_channels_all:
+                    channel_indices.append(nc_channels_all.index(ch))
+                else:
+                    raise ValueError(
+                        f"Channel '{ch}' not found in NC file {fp}. "
+                        f"Available: {nc_channels_all}"
+                    )
 
-        # Water area (may not exist in raw format)
-        water_area = ds['water_area'].values if 'water_area' in ds else None
+            # Hyperslab read: only decompresses chunks for the requested channels.
+            imagery = np.asarray(
+                nc.variables[var_name][:, channel_indices, :, :],
+                dtype=np.float32,
+            )
 
-        # Cloudy seq (may not exist in raw format)
-        if self.cloudy_seq_var and self.cloudy_seq_var in ds:
-            cloudy_seq_data = ds[self.cloudy_seq_var].values
-        else:
+            water_area = None
+            if 'water_area' in nc.variables:
+                water_area = np.asarray(nc.variables['water_area'][:], dtype=np.float32)
+
             cloudy_seq_data = None
+            if self.cloudy_seq_var and self.cloudy_seq_var in nc.variables:
+                cloudy_seq_data = np.asarray(nc.variables[self.cloudy_seq_var][:])
 
-        lake_id = ds.attrs.get('lake_id', fp.stem)
-        ds.close()
+            lake_id = nc.getncattr('lake_id') if 'lake_id' in nc.ncattrs() else fp.stem
 
         return imagery, water_area, cloudy_seq_data, lake_id
 

@@ -687,20 +687,29 @@ def train(config: dict):
         print(f"Augmentations: {list(AUGMENTATIONS.keys())}")
         print(f"Training set: {base_size} -> {len(train_dataset)} samples ({len(train_dataset) // base_size}x)")
 
-    # Create loaders
+    # Create loaders.
+    # Per-sample img_seq is ~300 MB (153 timesteps × 4 channels × 512² × float32),
+    # so RAM = workers × prefetch_factor × batch_size × ~300 MB. Old defaults
+    # (workers=7, prefetch=2, pin_memory=True) hit ~70 GB queued + pinned-copy
+    # overhead and OOM-killed the worker. Keep workers low and pin_memory off.
+    num_workers = config.get("num_workers", 2)
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.get("batch_size", 4),
         shuffle=True,
-        num_workers=config.get("num_workers", 4),
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=False,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=False,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.get("batch_size", 4),
         shuffle=False,
-        num_workers=config.get("num_workers", 4),
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=False,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=False,
     )
 
     # Create model
@@ -886,7 +895,10 @@ def train(config: dict):
         test_dataset,
         batch_size=config.get("batch_size", 4),
         shuffle=False,
-        num_workers=config.get("num_workers", 4),
+        num_workers=num_workers,
+        pin_memory=False,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=False,
     )
 
     # Load best model for test evaluation
@@ -988,7 +1000,10 @@ def main():
     parser.add_argument("--use_scheduler", action="store_true",
                         help="Enable ReduceLROnPlateau LR scheduler "
                              "(off by default in ESSD baseline).")
-    parser.add_argument("--num_workers", type=int, default=7)
+    parser.add_argument("--num_workers", type=int, default=2,
+                        help="DataLoader workers. Each worker buffers prefetch_factor "
+                             "× batch_size samples (~300 MB each), so RAM grows as "
+                             "workers × prefetch × batch × 300MB. Keep low.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_lakes", type=int, default=None,
                         help="Cap each split (train/val/test) at this many lakes. "
