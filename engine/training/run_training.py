@@ -983,7 +983,7 @@ def main():
     # without a long qualifier. Override explicitly via CLI for ablations.
     #
     # 5-class schema (ND/HF/MD/LD/CD), 200 epochs, bs=8, bf16 AMP,
-    # lr=1e-4 fixed (no scheduler), imgseq+areaseq+cloudyseq+mask active,
+    # lr=1e-4 fixed (no scheduler), imgseq+areaseq+mask active (no cloudyseq),
     # attention off, 4-layer FrontCNN. Seed 42 throughout.
     # -------------------------------------------------------------------
 
@@ -1066,8 +1066,8 @@ def main():
                         help="Use water area sequence")
     parser.add_argument("--no_areaseq", action="store_false", dest="use_areaseq",
                         help="Disable water area sequence")
-    parser.add_argument("--use_cloudyseq", action="store_true", default=True,
-                        help="Use cloudy sequence (default True for ESSD baseline)")
+    parser.add_argument("--use_cloudyseq", action="store_true", default=False,
+                        help="Use cloudy sequence (default off for ESSD baseline)")
     parser.add_argument("--no_cloudyseq", action="store_false", dest="use_cloudyseq",
                         help="Disable cloudy sequence")
     parser.add_argument("--learn_area_weights", action="store_true", default=False,
