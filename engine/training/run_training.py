@@ -473,18 +473,18 @@ def train(config: dict):
     # from CLI, every key is already populated by argparse so the .get fallback
     # is dead code, but keeping them in sync prevents future drift.
     print("\n--- TRAINING HYPERPARAMETERS ---")
-    print(f"Epochs:         {config.get('epochs', 200)}")
+    print(f"Epochs:         {config.get('epochs', 400)}")
     print(f"Batch size:     {config.get('batch_size', 8)}")
     print(f"Learning rate:  {config.get('lr', 1e-4)}")
     print(f"Weight decay:   {config.get('weight_decay', 1e-5)}")
     print(f"AMP (bf16):     {config.get('amp', True)}")
     print(f"Scheduler:      {config.get('use_scheduler', False)}")
-    print(f"Num workers:    {config.get('num_workers', 2)}")
+    print(f"Num workers:    {config.get('num_workers', 12)}")
 
     print("\n--- INPUT STREAMS ---")
     print(f"use_imgseq:     {config.get('use_imgseq', True)}")
     print(f"use_areaseq:    {config.get('use_areaseq', True)}")
-    print(f"use_cloudyseq:  {config.get('use_cloudyseq', True)}")
+    print(f"use_cloudyseq:  {config.get('use_cloudyseq', False)}")
     print(f"cloudy_seq_var: {config.get('cloudy_seq_var', 'cloudy_seq_rgb')}")
 
     print("\n--- SPECTRAL BANDS ---")
@@ -645,7 +645,7 @@ def train(config: dict):
         train_labels = [label_map[lid] for lid in train_ids if lid in label_map and (nc_dir / f"{lid}.nc").exists()]
 
     label_counts = Counter(train_labels)
-    num_classes = config.get("num_classes", 4)
+    num_classes = config.get("num_classes", 5)
     total_train = len(train_labels)
     class_weights = torch.tensor([
         total_train / (num_classes * label_counts.get(i, 1))
@@ -711,7 +711,7 @@ def train(config: dict):
     num_workers = config.get("num_workers", 12)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.get("batch_size", 4),
+        batch_size=config.get("batch_size", 8),
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
@@ -720,7 +720,7 @@ def train(config: dict):
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.get("batch_size", 4),
+        batch_size=config.get("batch_size", 8),
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
@@ -729,7 +729,7 @@ def train(config: dict):
     )
 
     # Create model
-    num_classes = config.get("num_classes", 4)
+    num_classes = config.get("num_classes", 5)
     seq_len = config.get("seq_len", 153)
     model = LakeDrainageClassifier(
         use_imgseq=config.get("use_imgseq", True),
@@ -908,7 +908,7 @@ def train(config: dict):
     # Final test evaluation
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.get("batch_size", 4),
+        batch_size=config.get("batch_size", 8),
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
