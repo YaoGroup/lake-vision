@@ -2,13 +2,13 @@
 #SBATCH --job-name=lv_essd_combined_io
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
-#SBATCH --time=60:00:00
+#SBATCH --time=72:00:00
 #SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=128GB
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=256GB
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu

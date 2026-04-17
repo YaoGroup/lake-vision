@@ -982,7 +982,7 @@ def main():
     # SLURM scripts can stay short and the paper can cite "default values"
     # without a long qualifier. Override explicitly via CLI for ablations.
     #
-    # 5-class schema (ND/HF/MD/LD/CD), 200 epochs, bs=8, bf16 AMP,
+    # 5-class schema (ND/HF/MD/LD/CD), 400 epochs, bs=8, bf16 AMP,
     # lr=1e-4 fixed (no scheduler), imgseq+areaseq+mask active (no cloudyseq),
     # attention off, 4-layer FrontCNN. Seed 42 throughout.
     # -------------------------------------------------------------------
@@ -1002,7 +1002,7 @@ def main():
                         help="Column name for moulin/hydrofracture indicator (used with --label_mode ed_split)")
 
     # Training hyperparameters
-    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--epochs", type=int, default=400)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4,
                         help="Fixed learning rate (no scheduler in ESSD baseline)")
