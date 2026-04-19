@@ -543,6 +543,56 @@ def train(config: dict):
     else:
         CLASS_NAMES = CLASS_NAMES_ORIGINAL
 
+    # ------------------------------------------------------------------
+    # Optional class merge: fold CLASS_B into CLASS_A, producing a merged
+    # class named "CLASS_A+CLASS_B" (e.g. MDLD). Indices are renumbered
+    # so they stay contiguous 0..num_classes-1.
+    # ------------------------------------------------------------------
+    merge_classes = config.get("merge_classes")
+    if merge_classes is not None:
+        class_a, class_b = merge_classes
+        if class_a not in CLASS_NAMES:
+            raise ValueError(f"--merge_classes: '{class_a}' not in {CLASS_NAMES}")
+        if class_b not in CLASS_NAMES:
+            raise ValueError(f"--merge_classes: '{class_b}' not in {CLASS_NAMES}")
+        if class_a == class_b:
+            raise ValueError(f"--merge_classes: cannot merge a class with itself")
+
+        idx_a = CLASS_NAMES.index(class_a)
+        idx_b = CLASS_NAMES.index(class_b)
+        merged_name = class_a + class_b
+
+        # Build old→new index mapping: class_b → idx_a, then compress
+        new_names = [n for n in CLASS_NAMES if n != class_b]
+        new_names[new_names.index(class_a)] = merged_name
+        old_to_new = {}
+        for old_idx, name in enumerate(CLASS_NAMES):
+            if old_idx == idx_b:
+                old_to_new[old_idx] = new_names.index(merged_name)
+            elif name == class_a:
+                old_to_new[old_idx] = new_names.index(merged_name)
+            else:
+                old_to_new[old_idx] = new_names.index(name)
+
+        # Remap labels_dict
+        if labels_dict is not None:
+            labels_dict = {lid: old_to_new[lbl] for lid, lbl in labels_dict.items()}
+        if test_labels_dict is not None:
+            labels_dict_test = {lid: old_to_new[lbl] for lid, lbl in test_labels_dict.items()}
+            test_labels_dict = labels_dict_test
+
+        CLASS_NAMES = new_names
+        config["num_classes"] = len(CLASS_NAMES)
+
+        print(f"\n--- CLASS MERGE ---")
+        print(f"  Merged {class_b} into {class_a} → '{merged_name}'")
+        print(f"  New classes ({len(CLASS_NAMES)}): {CLASS_NAMES}")
+        print(f"  Index remap: {old_to_new}")
+        if labels_dict is not None:
+            counts = Counter(labels_dict.values())
+            for i, name in enumerate(CLASS_NAMES):
+                print(f"    {name} ({i}): {counts.get(i, 0)}")
+
     # Create data splits — three paths:
     #   1. Pre-computed ID files (learning-curve runs — fixed across N)
     #   2. Cross-year fixed test set
@@ -1000,6 +1050,12 @@ def main():
                              "from the sat-tile-stack GUI CSV; ESSD default)")
     parser.add_argument("--edm_edf_col", type=str, default="edm_edf",
                         help="Column name for moulin/hydrofracture indicator (used with --label_mode ed_split)")
+    parser.add_argument("--merge_classes", type=str, nargs=2, default=None,
+                        metavar=("CLASS_A", "CLASS_B"),
+                        help="Merge two classes into one. CLASS_B is folded into CLASS_A "
+                             "and the merged class is named CLASS_A+CLASS_B (e.g. "
+                             "--merge_classes MD LD produces a 4-class model with MDLD). "
+                             "Class names must match the label_mode scheme.")
 
     # Training hyperparameters
     parser.add_argument("--epochs", type=int, default=400)

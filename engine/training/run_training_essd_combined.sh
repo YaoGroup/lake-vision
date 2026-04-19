@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=256GB
+#SBATCH --mem=320GB
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -17,8 +17,8 @@
 # ESSD BASELINE 1 — COMBINED 2018+2019
 # =============================================================================
 #
-# This IS the canonical ESSD baseline (imagery + water_area + cloudy_seq_rgb
-# + static lake polygon mask, no attention, 5-class ND/HF/MD/LD/CD).
+# This IS the canonical ESSD baseline (imagery + water_area + static lake
+# polygon mask, no attention, 5-class ND/HF/MD/LD/CD, no cloudy_seq).
 # Most configuration is pulled from run_training.py's argparse defaults,
 # which are hardcoded to the ESSD baseline for simplicity + paper-citation.
 #
@@ -96,8 +96,8 @@ echo "Start time: $(date)"
 
 START_TIME=$(date +%s)
 
-# All other flags (num_classes=5, label_mode=essd_5class, epochs=200, bs=8,
-# amp, use_cloudyseq, attention_type=none, etc.) pulled from run_training.py
+# All other flags (num_classes=5, label_mode=essd_5class, epochs=400, bs=8,
+# amp, no cloudyseq, attention_type=none, etc.) pulled from run_training.py
 # argparse defaults.
 python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --labels_csv "$LABELS_2018" "$LABELS_2019" \
