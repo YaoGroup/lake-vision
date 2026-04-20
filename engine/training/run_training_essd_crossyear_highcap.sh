@@ -18,8 +18,9 @@
 # =============================================================================
 #
 # Same as run_training_essd_crossyear.sh but with a larger model:
-#   frontcnn_base_ch=16 (was 8), clstm_hidden=64 (was 32)
-# ~500k params vs ~140k. 5-class ND/HF/MD/LD/CD, 500 epochs.
+#   frontcnn_base_ch=16 (was 8), num_layers=3 (was 4), clstm_hidden=64 (was 32)
+# Wider early features, 2x ConvLSTM, 4x spatial res into LSTM.
+# 5-class ND/HF/MD/LD/CD, 500 epochs.
 # Train+val on CW 2019, test on CW 2018.
 #
 # USAGE:
@@ -97,6 +98,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --val_ids_file "$VAL_IDS" \
     --test_ids_file "$TEST_IDS" \
     --frontcnn_base_channels 16 \
+    --frontcnn_num_layers 3 \
     --clstm_hidden 64 \
     --epochs 500 \
     --wandb_name "essd_crossyear_highcap" \
