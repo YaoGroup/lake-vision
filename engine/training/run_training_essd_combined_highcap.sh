@@ -92,6 +92,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --frontcnn_base_channels 16 \
     --frontcnn_num_layers 3 \
     --clstm_hidden 64 \
+    --batch_size 4 \
     --epochs 500 \
     --wandb_name "essd_combined_highcap" \
     --save_path "$SAVE_PATH"
