@@ -88,7 +88,9 @@ START_TIME=$(date +%s)
 python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --labels_csv "$LABELS_2018" "$LABELS_2019" \
     --nc_dir "$NC_DIR" \
-    --train_ratio 0.7 --val_ratio 0.2 --test_ratio 0.1 \
+    --train_ids_file "$REPO_DIR/splits/essd_CW/train_ids.json" \
+    --val_ids_file "$REPO_DIR/splits/essd_CW/val_ids.json" \
+    --test_ids_file "$REPO_DIR/splits/essd_CW/test_ids.json" \
     --augment \
     --epochs 400 \
     --wandb_name "essd_combined_augment" \

@@ -2,7 +2,7 @@
 #SBATCH --job-name=lv_essd_combined
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
-#SBATCH --time=72:00:00
+#SBATCH --time=96:00:00
 #SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -102,7 +102,9 @@ START_TIME=$(date +%s)
 python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --labels_csv "$LABELS_2018" "$LABELS_2019" \
     --nc_dir "$NC_DIR" \
-    --train_ratio 0.7 --val_ratio 0.2 --test_ratio 0.1 \
+    --train_ids_file "$REPO_DIR/splits/essd_CW/train_ids.json" \
+    --val_ids_file "$REPO_DIR/splits/essd_CW/val_ids.json" \
+    --test_ids_file "$REPO_DIR/splits/essd_CW/test_ids.json" \
     --wandb_name "essd_combined" \
     --save_path "$SAVE_PATH"
 
