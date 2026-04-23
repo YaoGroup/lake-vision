@@ -8,9 +8,16 @@ import torch
 
 
 # Each augmentation is a function: img_seq [T, C, H, W] -> img_seq [T, C, H, W]
+# All 7 non-identity elements of the dihedral group D4 (symmetries of a square):
+# 4 rotations (0°, 90°, 180°, 270°) × 2 reflections = 8 total, minus identity = 7
 AUGMENTATIONS = {
-    'rot90':   lambda x: x.rot90(1, [-2, -1]),   # 90 degrees clockwise
-    'mirror':  lambda x: x.flip(-1),              # horizontal mirror
+    'rot90':       lambda x: x.rot90(1, [-2, -1]),               # 90° clockwise
+    'rot180':      lambda x: x.rot90(2, [-2, -1]),               # 180°
+    'rot270':      lambda x: x.rot90(3, [-2, -1]),               # 270° clockwise
+    'flip_h':      lambda x: x.flip(-1),                          # horizontal flip
+    'flip_v':      lambda x: x.flip(-2),                          # vertical flip
+    'rot90_flip':  lambda x: x.rot90(1, [-2, -1]).flip(-1),      # 90° + horizontal flip
+    'rot270_flip': lambda x: x.rot90(3, [-2, -1]).flip(-1),      # 270° + horizontal flip
 }
 
 
