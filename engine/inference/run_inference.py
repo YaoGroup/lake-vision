@@ -102,11 +102,32 @@ def main():
     model.eval()
     print(f"Loaded checkpoint: {args.checkpoint}")
 
+    # --- Resume support: read any predictions already in output_csv and skip them. ---
+    out_path = Path(args.output_csv)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["lake_id", "true_label", "pred_label",
+                  "p_ND", "p_HF", "p_MD", "p_LD", "p_CD"]
+    already_done = set()
+    if out_path.exists() and out_path.stat().st_size > 0:
+        with open(out_path) as f:
+            for row in csv.DictReader(f):
+                already_done.add(row["lake_id"])
+        print(f"Resuming: found {len(already_done)} cached predictions in {out_path.name}")
+
+    # Open in append mode and flush after each row so a SLURM kill leaves a
+    # valid partial CSV on disk that the next run can resume from.
+    file_existed = out_path.exists() and out_path.stat().st_size > 0
+    fout = open(out_path, "a", newline="")
+    writer = csv.DictWriter(fout, fieldnames=fieldnames)
+    if not file_existed:
+        writer.writeheader()
+        fout.flush()
+
     nc_dir = Path(args.nc_dir)
-    rows = []
     t0 = time.time()
-    n_done = n_skip = 0
-    for idx, lid in enumerate(ids):
+    n_done_this_run = n_skip = 0
+    todo = [lid for lid in ids if lid not in already_done]
+    for idx, lid in enumerate(todo):
         nc_path = nc_dir / f"{lid}.nc"
         if not nc_path.exists():
             print(f"  SKIP {lid}: file not found")
@@ -118,30 +139,26 @@ def main():
             print(f"  SKIP {lid}: {e}")
             n_skip += 1
             continue
-        rows.append({
+        writer.writerow({
             "lake_id": lid,
             "true_label": labels.get(lid, ""),
             "pred_label": pred,
             "p_ND": float(probs[0]), "p_HF": float(probs[1]), "p_MD": float(probs[2]),
             "p_LD": float(probs[3]), "p_CD": float(probs[4]),
         })
-        n_done += 1
+        fout.flush()
+        n_done_this_run += 1
         if (idx + 1) % 50 == 0 or idx == 0:
             dt = time.time() - t0
-            eta = dt / (idx + 1) * (len(ids) - idx - 1) / 60
-            print(f"  [{idx+1:4d}/{len(ids)}]  done={n_done}  skipped={n_skip}  "
-                  f"elapsed={dt/60:.1f}m  ETA={eta:.1f}m")
+            eta = dt / (idx + 1) * (len(todo) - idx - 1) / 60
+            print(f"  [{idx+1:4d}/{len(todo)}]  done_this_run={n_done_this_run}  "
+                  f"skipped={n_skip}  elapsed={dt/60:.1f}m  ETA={eta:.1f}m")
 
-    out_path = Path(args.output_csv)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", newline="") as f:
-        if rows:
-            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            w.writeheader()
-            for r in rows:
-                w.writerow(r)
-    print(f"Wrote {len(rows)} rows to {out_path}")
-    print(f"Total: {(time.time()-t0)/60:.1f}m  done={n_done}  skipped={n_skip}")
+    fout.close()
+    total_in_csv = len(already_done) + n_done_this_run
+    print(f"Wrote {n_done_this_run} new rows to {out_path} "
+          f"(total now {total_in_csv}/{len(ids)})")
+    print(f"This run: {(time.time()-t0)/60:.1f}m  done_this_run={n_done_this_run}  skipped={n_skip}")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 #SBATCH --job-name=lv_essd_inference_crossyear_bestf1
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH -p serc
 #SBATCH --gpus=1
 #SBATCH --nodes=1
