@@ -124,13 +124,23 @@ def main():
         fout.flush()
 
     nc_dir = Path(args.nc_dir)
+
+    def find_nc(lid):
+        # Try flat layout first (training-style staged dir), then CW_YYYY/ subdirs
+        # (selectively-staged dir mirroring OAK's composite layout).
+        flat = nc_dir / f"{lid}.nc"
+        if flat.exists():
+            return flat
+        year = lid.split("_", 1)[0][2:]   # 'CW2019_1234' -> '2019'
+        return nc_dir / f"CW_{year}" / f"{lid}.nc"
+
     t0 = time.time()
     n_done_this_run = n_skip = 0
     todo = [lid for lid in ids if lid not in already_done]
     for idx, lid in enumerate(todo):
-        nc_path = nc_dir / f"{lid}.nc"
+        nc_path = find_nc(lid)
         if not nc_path.exists():
-            print(f"  SKIP {lid}: file not found")
+            print(f"  SKIP {lid}: file not found at {nc_path}")
             n_skip += 1
             continue
         try:

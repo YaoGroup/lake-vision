@@ -52,15 +52,33 @@ echo "Out dir:    $OUT_DIR"
 echo "Start time: $(date)"
 echo "=============================================="
 
-# Stage composites to node-local SSD (matches the training-script pattern)
+# Stage ONLY the .nc files we'll predict on (val + test) — selective staging.
+# Concurrent training jobs on the same node also use $L_SCRATCH, so copying the
+# entire composites tree (~1679 files × ~30 MB ≈ 50 GB) competes with their
+# rsyncs and can exhaust node-local SSD ("No space left on device" on rsync).
+# The 879 files we actually need fit comfortably (~25 GB).
 NC_DIR="$L_SCRATCH/nc_data"
 mkdir -p "$NC_DIR"
+
+LIST="$L_SCRATCH/files_to_stage.txt"
+python3 -c "
+import json
+for path, year in [('$SPLITS_DIR/val_ids.json',  '2019'),
+                   ('$SPLITS_DIR/test_ids.json', '2018')]:
+    for lid in json.load(open(path)):
+        print(f'CW_{year}/{lid}.nc')
+" > "$LIST"
+N_NEEDED=$(wc -l < "$LIST")
+echo "Staging $N_NEEDED selected .nc files (val + test only) to $NC_DIR ..."
+
 COPY_START=$(date +%s)
-rsync -a "$COMPOSITES_ROOT/CW_2018/" "$NC_DIR/"
-rsync -a "$COMPOSITES_ROOT/CW_2019/" "$NC_DIR/"
+rsync -a --files-from="$LIST" "$COMPOSITES_ROOT/" "$NC_DIR/"
 COPY_END=$(date +%s)
-NC_COUNT=$(ls "$NC_DIR/"*.nc 2>/dev/null | wc -l)
-echo "Staged $NC_COUNT .nc files to $NC_DIR in $((COPY_END - COPY_START))s"
+N_STAGED=$(find "$NC_DIR" -name '*.nc' | wc -l)
+echo "Staged $N_STAGED .nc files in $((COPY_END - COPY_START))s"
+echo "Local-scratch usage:"
+du -sh "$NC_DIR"
+df -h "$L_SCRATCH" | tail -1
 
 ml system python/3.12.1 py-numpy/1.26.3_py312 py-pandas/2.2.1_py312 \
     py-scipy/1.12.0_py312 py-pytorch/2.2.1_py312 py-torchvision/0.17.1_py312 \
