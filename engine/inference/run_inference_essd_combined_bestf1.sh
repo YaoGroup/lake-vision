@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=lv_essd_inference_crossyear_bestf1
+#SBATCH --job-name=lv_essd_inference_combined_bestf1
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
 #SBATCH --time=04:00:00
@@ -13,15 +13,20 @@
 #SBATCH --mail-user=jrines@stanford.edu
 
 # =============================================================================
-# Inference: cross-year best-F1 checkpoint on train (CW 2019, n=800)
-#                                          + val   (CW 2019, n=200)
-#                                          + test  (CW 2018, n=679)
+# Inference: COMBINED best-val-F1 checkpoint (saved @ epoch 334, val F1 0.607)
+# on the combined 70/20/10 stratified split:
+#     train (n=1175)  +  val (n=336)  +  test (n=168)   — all year-mixed
+#
+# Combined splits draw from BOTH CW 2018 and CW 2019, so (unlike the
+# cross-year script) the year is derived per-lake from the lake_id prefix
+# (CW2018_* -> 2018, CW2019_* -> 2019) and BOTH label CSVs are passed to
+# run_inference.py (which accepts --labels_csv as nargs="+").
 #
 # Writes three CSVs to $OUT_DIR. Each row carries lake_id, true_label,
-# pred_label, and per-class softmax probabilities (p_ND, p_HF, p_MD, p_LD, p_CD).
+# pred_label, and per-class softmax probabilities (p_ND..p_CD).
 #
 # USAGE:
-#   sbatch run_inference_essd_crossyear_bestf1.sh
+#   sbatch run_inference_essd_combined_bestf1.sh
 # =============================================================================
 
 set -euo pipefail
@@ -31,12 +36,11 @@ REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
 COMPOSITES_ROOT="$SHERLOCK_DIR/composites"
 LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
 
-CHECKPOINT="$SHERLOCK_DIR/models/essd/crossyear/lakevision_essd_crossyear_bestf1.pth"
-SPLITS_DIR="$REPO_DIR/splits/essd_CW_crossyear"
-OUT_DIR="$SHERLOCK_DIR/inference_essd/crossyear"
+CHECKPOINT="$SHERLOCK_DIR/models/essd/combined/lakevision_essd_combined_bestf1.pth"
+SPLITS_DIR="$REPO_DIR/splits/essd_CW"
+OUT_DIR="$SHERLOCK_DIR/inference_essd/combined"
 
-# Refuse to clobber: this run must go to a fresh directory. The legacy
-# results under $SHERLOCK_DIR/inference/essd_crossyear_bestf1 are left intact.
+# Refuse to clobber: this run must go to a fresh directory.
 if [ -e "$OUT_DIR" ] && [ -n "$(ls -A "$OUT_DIR" 2>/dev/null)" ]; then
     echo "ERROR: $OUT_DIR already exists and is non-empty — refusing to overwrite."
     echo "       Move/rename it or change OUT_DIR, then resubmit."
@@ -54,31 +58,35 @@ for f in "$CHECKPOINT" \
 done
 
 echo "=============================================="
-echo "ESSD inference: cross-year bestf1"
+echo "ESSD inference: combined bestf1 (ep 334, val F1 0.607)"
 echo "=============================================="
 echo "Checkpoint: $CHECKPOINT"
+echo "Splits:     $SPLITS_DIR  (combined 70/20/10, year-mixed)"
 echo "Out dir:    $OUT_DIR"
 echo "Start time: $(date)"
 echo "=============================================="
 
-# Stage ONLY the .nc files we'll predict on (train + val + test) — selective
-# staging. Concurrent training jobs on the same node also use $L_SCRATCH, so
-# copying the entire composites tree (~1679 files × ~30 MB ≈ 50 GB) competes
-# with their rsyncs and can exhaust node-local SSD ("No space left on device"
-# on rsync). The 1679 files we actually need fit at ~50 GB; bump --mem-per-cpu
-# or move to a node with more $L_SCRATCH headroom if you observe rsync errors.
+# Stage ONLY the .nc files we predict on. Combined splits are year-mixed, so
+# derive the year from each lake_id prefix and preserve the CW_{year}/ subdir
+# in $NC_DIR (run_inference.py's path resolver looks for nc_dir/CW_{year}/{id}.nc
+# when a flat nc_dir/{id}.nc is absent). train+val+test == all 1679 lakes.
 NC_DIR="$L_SCRATCH/nc_data"
 mkdir -p "$NC_DIR"
 
 LIST="$L_SCRATCH/files_to_stage.txt"
 python3 -c "
 import json
-for path, year in [('$SPLITS_DIR/train_ids.json', '2019'),
-                   ('$SPLITS_DIR/val_ids.json',   '2019'),
-                   ('$SPLITS_DIR/test_ids.json',  '2018')]:
+seen = set()
+for path in ['$SPLITS_DIR/train_ids.json',
+             '$SPLITS_DIR/val_ids.json',
+             '$SPLITS_DIR/test_ids.json']:
     for lid in json.load(open(path)):
+        if lid in seen:
+            continue
+        seen.add(lid)
+        year = '2018' if lid.startswith('CW2018') else '2019'
         print(f'CW_{year}/{lid}.nc')
-" > "$LIST"
+" | sort -u > "$LIST"
 N_NEEDED=$(wc -l < "$LIST")
 echo "Staging $N_NEEDED selected .nc files (train + val + test) to $NC_DIR ..."
 
@@ -101,33 +109,36 @@ cd "$SHERLOCK_DIR"
 
 START=$(date +%s)
 
-# --- TRAIN: 800 lakes from CW 2019 ---
+# Both label CSVs passed every call; run_inference.py merges them and resolves
+# each lake by id (the splits, not the CSV, define which lakes are scored).
+
+# --- TRAIN: 1175 lakes (year-mixed) ---
 echo ""
-echo "--- train 2019 (800 lakes) ---"
+echo "--- combined train (1175 lakes) ---"
 python3 -u "$REPO_DIR/engine/inference/run_inference.py" \
     --checkpoint "$CHECKPOINT" \
     --ids_file   "$SPLITS_DIR/train_ids.json" \
-    --labels_csv "$LABELS_ROOT/labels_CW_2019.csv" \
+    --labels_csv "$LABELS_ROOT/labels_CW_2018.csv" "$LABELS_ROOT/labels_CW_2019.csv" \
     --nc_dir     "$NC_DIR" \
     --output_csv "$OUT_DIR/train_predictions_bestf1.csv"
 
-# --- VAL: 200 lakes from CW 2019 ---
+# --- VAL: 336 lakes (year-mixed) ---
 echo ""
-echo "--- val 2019 (200 lakes) ---"
+echo "--- combined val (336 lakes) ---"
 python3 -u "$REPO_DIR/engine/inference/run_inference.py" \
     --checkpoint "$CHECKPOINT" \
     --ids_file   "$SPLITS_DIR/val_ids.json" \
-    --labels_csv "$LABELS_ROOT/labels_CW_2019.csv" \
+    --labels_csv "$LABELS_ROOT/labels_CW_2018.csv" "$LABELS_ROOT/labels_CW_2019.csv" \
     --nc_dir     "$NC_DIR" \
     --output_csv "$OUT_DIR/val_predictions_bestf1.csv"
 
-# --- TEST: 679 lakes from CW 2018 ---
+# --- TEST: 168 lakes (year-mixed) — the row dropped in the 20260507R session ---
 echo ""
-echo "--- test 2018 (679 lakes) ---"
+echo "--- combined test (168 lakes) ---"
 python3 -u "$REPO_DIR/engine/inference/run_inference.py" \
     --checkpoint "$CHECKPOINT" \
     --ids_file   "$SPLITS_DIR/test_ids.json" \
-    --labels_csv "$LABELS_ROOT/labels_CW_2018.csv" \
+    --labels_csv "$LABELS_ROOT/labels_CW_2018.csv" "$LABELS_ROOT/labels_CW_2019.csv" \
     --nc_dir     "$NC_DIR" \
     --output_csv "$OUT_DIR/test_predictions_bestf1.csv"
 
