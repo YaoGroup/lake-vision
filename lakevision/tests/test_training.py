@@ -43,7 +43,7 @@ class TestTrainingPipeline:
             attention_type='none',
         )
 
-        img_seq, area_seq, label, lake_id = next(iter(loader))
+        img_seq, area_seq, cloudy_seq, label, lake_id = next(iter(loader))
         logits = model(img_seq, area_seq, None)
 
         assert logits.shape == (1, 4)
@@ -68,7 +68,7 @@ class TestTrainingPipeline:
         )
         criterion = nn.CrossEntropyLoss()
 
-        img_seq, area_seq, label, lake_id = next(iter(loader))
+        img_seq, area_seq, cloudy_seq, label, lake_id = next(iter(loader))
         logits = model(img_seq, area_seq, None)
         loss = criterion(logits, label)
         loss.backward()
@@ -99,7 +99,7 @@ class TestTrainingPipeline:
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
         model.train()
-        img_seq, area_seq, label, lake_id = next(iter(loader))
+        img_seq, area_seq, cloudy_seq, label, lake_id = next(iter(loader))
 
         optimizer.zero_grad()
         logits = model(img_seq, area_seq, None)
@@ -120,7 +120,7 @@ class TestTrainingPipeline:
             label_col='label_rines'
         )
         loader = DataLoader(dataset, batch_size=1)
-        img_seq, area_seq, label, lake_id = next(iter(loader))
+        img_seq, area_seq, cloudy_seq, label, lake_id = next(iter(loader))
 
         for attention_type in ['none', 'spatial', 'full', 'arch']:
             model = LakeDrainageClassifier(
@@ -156,7 +156,7 @@ class TestTrainingPipeline:
         )
         criterion = nn.CrossEntropyLoss()
 
-        img_seq, area_seq, label, lake_id = next(iter(loader))
+        img_seq, area_seq, cloudy_seq, label, lake_id = next(iter(loader))
         logits = model(img_seq, None, None)
         loss = criterion(logits, label)
         loss.backward()
@@ -181,7 +181,7 @@ class TestTrainingPipeline:
         )
         criterion = nn.CrossEntropyLoss()
 
-        img_seq, area_seq, label, lake_id = next(iter(loader))
+        img_seq, area_seq, cloudy_seq, label, lake_id = next(iter(loader))
         logits = model(None, area_seq, None)
         loss = criterion(logits, label)
         loss.backward()

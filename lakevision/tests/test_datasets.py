@@ -56,6 +56,7 @@ def sample_nc_dir(tmp_path):
                 "imagery": (["time", "channel", "y", "x"], imagery),
                 "water_area": (["time"], water_area),
             },
+            coords={"channel": ["red", "green", "blue", "mask"]},
             attrs={"lake_id": f"TEST_{i:03d}"},
         )
         ds.to_netcdf(tmp_path / f"lake_{i}.nc")
@@ -85,7 +86,7 @@ class TestLakeDatasetSynthetic:
     def test_getitem_returns_correct_types(self, sample_nc_file):
         """Test that __getitem__ returns correct types."""
         dataset = LakeDataset(sample_nc_file, seq_len=21)
-        img_seq, area_seq, label, lake_id = dataset[0]
+        img_seq, area_seq, cloudy_seq, label, lake_id = dataset[0]
         
         assert isinstance(img_seq, torch.Tensor)
         assert isinstance(area_seq, torch.Tensor)
@@ -96,7 +97,7 @@ class TestLakeDatasetSynthetic:
         """Test that __getitem__ returns correct shapes."""
         seq_len = 21
         dataset = LakeDataset(sample_nc_file, seq_len=seq_len)
-        img_seq, area_seq, label, lake_id = dataset[0]
+        img_seq, area_seq, cloudy_seq, label, lake_id = dataset[0]
         
         assert img_seq.shape[0] == seq_len  # [seq_len, C, H, W]
         assert img_seq.shape[1] == 4  # RGBM channels
@@ -106,7 +107,7 @@ class TestLakeDatasetSynthetic:
     def test_getitem_returns_correct_dtypes(self, sample_nc_file):
         """Test that __getitem__ returns correct dtypes."""
         dataset = LakeDataset(sample_nc_file, seq_len=21)
-        img_seq, area_seq, label, lake_id = dataset[0]
+        img_seq, area_seq, cloudy_seq, label, lake_id = dataset[0]
         
         assert img_seq.dtype == torch.float32
         assert area_seq.dtype == torch.float32
@@ -115,13 +116,13 @@ class TestLakeDatasetSynthetic:
     def test_default_label(self, sample_nc_file):
         """Test that default label is applied."""
         dataset = LakeDataset(sample_nc_file, seq_len=21, label=2)
-        _, _, label, _ = dataset[0]
+        _, _, _, label, _ = dataset[0]
         assert label.item() == 2
 
     def test_no_label_returns_minus_one(self, sample_nc_file):
         """Test that missing label returns -1."""
         dataset = LakeDataset(sample_nc_file, seq_len=21)
-        _, _, label, _ = dataset[0]
+        _, _, _, label, _ = dataset[0]
         assert label.item() == -1
 
     def test_labels_file(self, sample_nc_file, tmp_path):
@@ -131,13 +132,13 @@ class TestLakeDatasetSynthetic:
         labels_fp.write_text("lake_id,label\nTEST_001,3\n")
         
         dataset = LakeDataset(sample_nc_file, seq_len=21, labels_file=labels_fp)
-        _, _, label, _ = dataset[0]
+        _, _, _, label, _ = dataset[0]
         assert label.item() == 3
 
     def test_sequence_centered_on_max_area(self, sample_nc_file):
         """Test that sequence is centered on max water area."""
         dataset = LakeDataset(sample_nc_file, seq_len=21)
-        _, area_seq, _, _ = dataset[0]
+        _, area_seq, _, _, _ = dataset[0]
         
         # Max should be near the center of the sequence
         max_idx = area_seq.squeeze().argmax().item()
@@ -156,6 +157,7 @@ class TestLakeDatasetSynthetic:
                 "imagery": (["time", "channel", "y", "x"], imagery),
                 "water_area": (["time"], water_area),
             },
+            coords={"channel": ["red", "green", "blue", "mask"]},
             attrs={"lake_id": "TEST_NAN"},
         )
         fp = tmp_path / "nan_lake.nc"
@@ -163,7 +165,7 @@ class TestLakeDatasetSynthetic:
         ds.close()
         
         dataset = LakeDataset(fp, seq_len=21)
-        img_seq, _, _, _ = dataset[0]
+        img_seq, _, _, _, _ = dataset[0]
         
         assert not torch.isnan(img_seq).any()
 
@@ -193,7 +195,7 @@ class TestLakeDatasetRealData:
     def test_real_sample_shapes(self):
         """Test shapes from real sample data."""
         dataset = LakeDataset(SAMPLE_DATA_PATH, seq_len=21)
-        img_seq, area_seq, label, lake_id = dataset[0]
+        img_seq, area_seq, cloudy_seq, label, lake_id = dataset[0]
         
         assert img_seq.shape == (21, 4, 512, 512)
         assert area_seq.shape == (21, 1)
@@ -205,7 +207,7 @@ class TestLakeDatasetRealData:
         loader = DataLoader(dataset, batch_size=1)
         
         batch = next(iter(loader))
-        img_seq, area_seq, label, lake_id = batch
+        img_seq, area_seq, cloudy_seq, label, lake_id = batch
         
         assert img_seq.shape == (1, 21, 4, 512, 512)
         assert area_seq.shape == (1, 21, 1)
