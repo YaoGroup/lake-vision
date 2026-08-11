@@ -1,0 +1,119 @@
+# =============================================================================
+# WandB Sweep Configuration for Lake-Vision (ed_split label mode)
+# =============================================================================
+# Same grid as sweep.yaml but with ed_split label scheme:
+#   ND=0, LD+MD=1, HF=2, CD=3
+# ED lakes split by edm_edf column: moulin -> LD+MD, hydrofracture -> HF
+# Lakes with edm_edf='?' are dropped from the dataset.
+# Uses inverse-frequency weighted CrossEntropyLoss.
+#
+# Usage:
+#   1. Create sweep (login node): wandb sweep sweep_ed_split.yaml
+#   2. Run agent (compute node):  sbatch run_sweep.sh <sweep_id>
+#   3. Sync results (login node): wandb sync wandb/offline-run-*
+# =============================================================================
+
+name: lakevision-sweep-ed-split-v1
+program: run_training.py
+method: grid
+
+metric:
+  name: val_precision
+  goal: maximize
+
+# =============================================================================
+# PARAMETER GRID
+# =============================================================================
+# Same as sweep.yaml: 4 attention x 2 areaseq x 2 optimizer = 16 runs
+# =============================================================================
+
+parameters:
+  # -------------------------
+  # HIGH PRIORITY: Attention
+  # -------------------------
+  attention_type:
+    values: ["none", "spatial", "full", "arch"]
+
+  # -------------------------
+  # MEDIUM PRIORITY: Input streams
+  # -------------------------
+  use_imgseq:
+    value: true  # always use image sequence (core input)
+
+  use_areaseq:
+    values: [false, true]
+
+  use_cloudyseq:
+    value: false  # not yet supported in LakeDataset
+
+  # -------------------------
+  # LOW PRIORITY: Training params
+  # -------------------------
+  optimizer:
+    values: ["Adam", "SGD"]
+
+  lr:
+    value: 0.001  # fixed for now
+
+  batch_size:
+    value: 16  # fixed for now
+
+  # -------------------------
+  # FIXED: Architecture params
+  # -------------------------
+  num_epochs:
+    value: 250
+
+  seq_len:
+    value: 51
+
+  num_classes:
+    value: 4
+
+  # Frontend CNN
+  frontcnn_base_channels:
+    value: 8
+
+  frontcnn_num_layers:
+    value: 3
+
+  # ConvLSTM
+  clstm_hidden:
+    value: 32
+
+  # Scalar LSTM
+  slstm_hidden:
+    value: 16
+
+  # Random seed
+  seed:
+    value: 42
+
+  # -------------------------
+  # LABEL MODE: ed_split
+  # -------------------------
+  label_mode:
+    value: "ed_split"
+
+# =============================================================================
+# COMMAND TEMPLATE
+# =============================================================================
+# WandB substitutes ${args} with sweep parameters
+# Required paths are passed explicitly (not swept)
+# =============================================================================
+
+command:
+  - ${env}
+  - python3
+  - ${program}
+  - --dir_tstacks
+  - /oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks/
+  - --labels_csv
+  - /oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/sandbox/labels_ND_ED_LD_CD_2019CW.csv
+  - --dunmire_nc
+  - /oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision/sandbox/all_lakes_2019.nc
+  - --output_dir
+  - /oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/outputs
+  - --wandb_project
+  - lake-vision
+  - ${args}

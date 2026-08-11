@@ -1,0 +1,16 @@
+# ESSD learning-curve study — nested stratified train subsets at
+# N in {200, 400, 600, 800, 1000}. Uses pre-computed split files so
+# val and test sets are identical to the combined baseline (and fixed
+# across all N).
+#
+# The SLURM array job sets --max_train_lakes per task, so N is a
+# runtime arg rather than a YAML value. --train_ids_file /
+# --val_ids_file / --test_ids_file are also runtime args (paths).
+#
+# See essd_baseline.yaml for the canonical config inherited here.
+
+base_config: essd_baseline.yaml
+
+# Split files and max_train_lakes supplied via CLI at submission time.
+
+save_path_suffix: lcurve_N${N_TRAIN}   # expanded by the SLURM script per task

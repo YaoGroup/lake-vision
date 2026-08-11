@@ -1,0 +1,20 @@
+# End-to-end smoke test for the ESSD pipeline. Inherits the canonical
+# config but caps all splits to 50 lakes and runs 3 epochs, so the full
+# pipeline exercises in under an hour (mostly L_SCRATCH copy time).
+
+base_config: essd_baseline.yaml
+
+# Override epoch count for the pilot
+epochs: 3
+
+# Cap each of train/val/test at this many lakes (tests the full plumbing
+# with tiny data). --max_lakes is a separate knob from --max_train_lakes
+# and is intended for pilots only.
+max_lakes: 50
+
+# Piggyback on the combined split for the pilot's data path
+train_ratio: 0.7
+val_ratio: 0.2
+test_ratio: 0.1
+
+save_path_suffix: pilot

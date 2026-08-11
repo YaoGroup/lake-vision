@@ -15,8 +15,12 @@ __pycache__/
 *.out
 *.pth
 *.json
+!splits/**/*.json
 *.venv/
 venv/
 env/
 
 lakevision/data/samples/
+
+claudiary/
+sandbox/

@@ -1,0 +1,29 @@
+{
+  "labels_csv": [
+    "/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels/labels_CW_2018.csv",
+    "/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels/labels_CW_2019.csv"
+  ],
+  "seed": 42,
+  "train_ratio": 0.7,
+  "val_ratio": 0.2,
+  "test_ratio": 0.1,
+  "total_lakes": 1679,
+  "train_size": 1175,
+  "val_size": 336,
+  "test_size": 168,
+  "parent_distribution": {
+    "ND": 236,
+    "HF": 279,
+    "MD": 242,
+    "LD": 580,
+    "CD": 342
+  },
+  "class_map": {
+    "ND": 0,
+    "HF": 1,
+    "MD": 2,
+    "LD": 3,
+    "CD": 4
+  },
+  "train_ids_are_nested_stratified": true
+}

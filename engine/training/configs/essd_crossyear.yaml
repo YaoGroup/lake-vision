@@ -1,0 +1,17 @@
+# ESSD Baseline 2 — cross-year: train+val on CW 2019 (80/20 stratified),
+# CW 2018 held out as the full test set.
+#
+# To invoke: pass --labels_csv <CW_2019_labels> and
+# --test_labels_csv <CW_2018_labels> on the CLI (paths are environment-
+# specific so they do not belong in the YAML).
+#
+# See essd_baseline.yaml for the canonical config inherited here.
+
+base_config: essd_baseline.yaml
+
+train_ratio: 0.8
+val_ratio: 0.2
+
+# test_labels_csv supplied via CLI at submission time.
+
+save_path_suffix: crossyear      # result: lakevision_essd_crossyear.pth
