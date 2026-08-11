@@ -19,7 +19,7 @@
 #
 # Canonical ESSD cross-year baseline: train+val on CW 2019 (80/20 from
 # committed split files), test held out entirely on CW 2018. Uses the
-# same imagery + water_area + cloudy_seq_rgb + static mask composite
+# same imagery + water_area + static mask composite (no cloudy_seq)
 # inputs and the same 5-class model as the combined baseline (run_training.py
 # argparse defaults — see that file for the canonical configuration).
 #

@@ -19,8 +19,8 @@ monotone, nested fashion.
 Usage (locally):
 
     python engine/training/split_fixed.py \
-        --labels_csv sat-tile-stack/labeling/CW_2018/labels_CW_2018.csv \
-                     sat-tile-stack/labeling/CW_2019/labels_CW_2019.csv \
+        --labels_csv ../labels/CW_2018/labels_CW_2018.csv \
+                     ../labels/CW_2019/labels_CW_2019.csv \
         --out_dir lake-vision/splits/essd_CW \
         --train_ratio 0.7 --val_ratio 0.2 --test_ratio 0.1 \
         --seed 42
