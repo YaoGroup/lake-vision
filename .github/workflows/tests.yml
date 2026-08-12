@@ -1,12 +1,11 @@
 name: Tests
 
 on:
-  # Temporarily disabled - uncomment to re-enable
-  # push:
-  #   branches: [ main, develop ]
-  # pull_request:
-  #   branches: [ main, develop ]
-  workflow_dispatch:  # Keep this to allow manual runs
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # allow manual runs too
 
 jobs:
   test:
