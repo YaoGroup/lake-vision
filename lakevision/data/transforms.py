@@ -64,12 +64,13 @@ class AugmentedDatasetWrapper(torch.utils.data.Dataset):
         base_idx = idx // self.n_versions
         aug_idx = idx % self.n_versions
 
-        img_seq, area_seq, cloudy_seq, label, lake_id = self.base_dataset[base_idx]
-
+        # Tuple length varies by dataset: LakeDataset returns 5 elements,
+        # CachedLakeDataset returns 6 (it appends the BOA offset). Transform
+        # element 0 and pass the rest through untouched.
+        sample = self.base_dataset[base_idx]
         if self.transforms[aug_idx] is not None:
-            img_seq = self.transforms[aug_idx](img_seq)
-
-        return img_seq, area_seq, cloudy_seq, label, lake_id
+            sample = (self.transforms[aug_idx](sample[0]),) + tuple(sample[1:])
+        return sample
 
 
 class RandomD4Dataset(torch.utils.data.Dataset):
@@ -115,7 +116,9 @@ class RandomD4Dataset(torch.utils.data.Dataset):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        img_seq, area_seq, cloudy_seq, label, lake_id = self.base_dataset[idx]
+        # Tuple length varies by dataset (LakeDataset 5, CachedLakeDataset 6);
+        # transform element 0 and pass the rest through.
+        sample = self.base_dataset[idx]
 
         if self.seed is None:
             aug_idx = int(torch.randint(self.n_versions, (1,)).item())
@@ -126,6 +129,5 @@ class RandomD4Dataset(torch.utils.data.Dataset):
             aug_idx = int(torch.randint(self.n_versions, (1,), generator=g).item())
 
         if self.transforms[aug_idx] is not None:
-            img_seq = self.transforms[aug_idx](img_seq)
-
-        return img_seq, area_seq, cloudy_seq, label, lake_id
+            sample = (self.transforms[aug_idx](sample[0]),) + tuple(sample[1:])
+        return sample

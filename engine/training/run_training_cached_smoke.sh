@@ -1,0 +1,142 @@
+#!/bin/bash
+#SBATCH --job-name=lv_cache_smoke
+#SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
+#SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
+#SBATCH --time=03:00:00
+#SBATCH -p serc
+#SBATCH --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH -C GPU_SKU:A100_SXM4
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=jrines@stanford.edu
+
+# =============================================================================
+# CACHED PIPELINE — end-to-end validation on the REAL training path
+# =============================================================================
+#
+# Supersedes engine/benchmarks/run_prototype.sh, which exercised a benchmark
+# harness that merely resembled training. This runs run_training.py itself with
+# --use_cache, so what gets measured is what will actually train.
+#
+# STEPS
+#   0. print L_SCRATCH capacity + node specs (the number that gates the
+#      full-scale plan; $L_SCRATCH only exists inside an allocation)
+#   1. build a 200-lake blosc2 cache on node-local SSD
+#   2. benchmark dataloader-vs-compute at bs=8/32/64
+#   3. run real training for a few epochs at bs=32
+#
+# GO/NO-GO
+#   Extrapolated epoch time at N=1175 must land far below the ~14.5 min/epoch
+#   the old NetCDF pipeline took. If it does not, stop and re-plan before
+#   committing a multi-terabyte cache build.
+#
+# RESOURCES — deliberately 16 cores + 128 GB, which is exactly one GPU's share
+# of an A100 node (SH3_G4TF64: 64c/512G/4 GPUs). The ESSD scripts asked for
+# 320 GB against 1 GPU, which forces SLURM to strand 2 other A100s and is
+# probably a large part of past queue times. No GPU_MEM:80GB constraint either:
+# with the FrontCNN upsample removed and gradient checkpointing on, bs=64 needs
+# ~17 GB, so any 40 GB A100 works.
+#
+# USAGE
+#   sbatch engine/training/run_training_cached_smoke.sh
+# =============================================================================
+
+set -euo pipefail
+
+SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
+REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
+STACKS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks_v2"
+LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
+RESULTS_DIR="$SHERLOCK_DIR/benchmarks"
+MODELS_DIR="$SHERLOCK_DIR/models/cache_smoke"
+
+CACHE_DIR="$L_SCRATCH/cache"
+N_PER_YEAR=100        # 200 lakes total
+
+mkdir -p "$SHERLOCK_DIR/logs" "$RESULTS_DIR" "$MODELS_DIR"
+
+echo "=============================================="
+echo "CACHED PIPELINE SMOKE TEST"
+echo "Node:    $(hostname)"
+echo "Job:     ${SLURM_JOB_ID:-none}"
+echo "Started: $(date)"
+echo "=============================================="
+
+echo ""
+echo "--- STEP 0: L_SCRATCH capacity (gates the 5-band plan at N=5000) ---"
+df -h "$L_SCRATCH"
+echo ""
+echo "--- node resources ---"
+echo "CPUs: $(nproc)    RAM: $(free -g | awk '/^Mem:/{print $2}') GB"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+
+ml system python/3.12.1 py-numpy/1.26.3_py312 py-pandas/2.2.1_py312 \
+   py-scipy/1.12.0_py312 py-pytorch/2.2.1_py312 py-torchvision/0.17.1_py312 \
+   py-scikit-learn/1.5.1_py312
+
+pip install --user --quiet blosc2 netcdf4 xarray
+python3 -c "import blosc2, torch; print(f'blosc2 {blosc2.__version__} | torch {torch.__version__}')"
+
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+export WANDB_MODE=offline
+export WANDB_DIR="$SHERLOCK_DIR"
+cd "$REPO_DIR"
+
+# --- 1. build cache ----------------------------------------------------------
+echo ""
+echo "=============================================="
+echo "STEP 1  build cache ($((N_PER_YEAR * 2)) lakes)"
+echo "=============================================="
+T0=$(date +%s)
+python3 -u engine/preprocessing/build_cache.py \
+    --stacks_root "$STACKS_ROOT" \
+    --out_root    "$CACHE_DIR" \
+    --years CW_2018 CW_2019 \
+    --bands B04 B03 B02 \
+    --masks lake_boundary water_mask_ndwi \
+    --limit "$N_PER_YEAR"
+echo "cache build: $(( $(date +%s) - T0 ))s, $(du -sh "$CACHE_DIR" | cut -f1) on disk"
+
+# --- 2. dataloader vs compute -----------------------------------------------
+echo ""
+echo "=============================================="
+echo "STEP 2  benchmark: dataloader vs compute"
+echo "=============================================="
+python3 -u engine/benchmarks/bench_pipeline.py \
+    --cache_root "$CACHE_DIR" \
+    --bands B04 B03 B02 \
+    --batch_sizes 8 32 64 \
+    --epochs 3 \
+    --host_mem_budget_gb 80 \
+    --max_workers 12 \
+    --out "$RESULTS_DIR/cache_bench_${SLURM_JOB_ID}.json"
+
+# --- 3. the real training path ----------------------------------------------
+echo ""
+echo "=============================================="
+echo "STEP 3  run_training.py --use_cache (5 epochs)"
+echo "=============================================="
+T0=$(date +%s)
+python3 -u engine/training/run_training.py \
+    --labels_csv "$LABELS_ROOT/labels_CW_2018.csv" "$LABELS_ROOT/labels_CW_2019.csv" \
+    --use_cache --cache_root "$CACHE_DIR" \
+    --cache_bands B04 B03 B02 \
+    --scalar_var p_water \
+    --batch_size 32 \
+    --epochs 5 \
+    --gradient_checkpointing \
+    --host_mem_budget_gb 80 \
+    --num_workers 12 \
+    --train_ratio 0.7 --val_ratio 0.2 --test_ratio 0.1 \
+    --wandb_name "cache_smoke_${SLURM_JOB_ID}" \
+    --save_path "$MODELS_DIR/cache_smoke.pth"
+echo "training (5 epochs): $(( $(date +%s) - T0 ))s"
+
+echo ""
+echo "=============================================="
+echo "Finished: $(date)"
+echo "Bench JSON: $RESULTS_DIR/cache_bench_${SLURM_JOB_ID}.json"
+echo "=============================================="

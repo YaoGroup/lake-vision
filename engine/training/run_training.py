@@ -292,8 +292,24 @@ def create_splits_fixed_test(
     return train_ids, val_ids, test_ids
 
 
+def unpack_batch(batch):
+    """Split a batch from either dataset into a common shape.
+
+    LakeDataset yields 5 elements (already float32, already normalized).
+    CachedLakeDataset yields 6, appending the per-timestep BOA offset, because
+    its imagery is uint16 raw DN that still needs
+    (stored/DN_SCALE + boa)/10000 applied -- on the GPU, which is what keeps the
+    dataloader queue at 2 bytes/value instead of 4.
+
+    Returns (img, area_seq, cloudy_seq, labels, boa_or_None).
+    """
+    img, area_seq, cloudy_seq, labels = batch[0], batch[1], batch[2], batch[3]
+    boa = batch[5] if len(batch) > 5 else None
+    return img, area_seq, cloudy_seq, labels, boa
+
+
 def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
-                    accumulation_steps=1, amp=False):
+                    accumulation_steps=1, amp=False, normalize_fn=None):
     """Train for one epoch and return loss + metrics.
 
     Args:
@@ -315,19 +331,23 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
     amp_dtype = torch.bfloat16 if amp else None
 
     for batch_idx, batch in enumerate(loader):
-        img_seq, area_seq, cloudy_seq, labels, _ = batch
+        img_seq, area_seq, cloudy_seq, labels, boa = unpack_batch(batch)
 
-        img_seq = img_seq.to(device)
-        area_seq = area_seq.to(device)
-        cloudy_seq = cloudy_seq.to(device)
-        labels = labels.to(device)
+        img_seq = img_seq.to(device, non_blocking=True)
+        area_seq = area_seq.to(device, non_blocking=True)
+        cloudy_seq = cloudy_seq.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        if boa is not None:
+            boa = boa.to(device, non_blocking=True)
 
         if amp:
             with torch.autocast(device_type='cuda', dtype=amp_dtype):
-                logits = model(img_seq, area_seq, cloudy_seq)
+                x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
+                logits = model(x, area_seq, cloudy_seq)
                 loss = criterion(logits, labels)
         else:
-            logits = model(img_seq, area_seq, cloudy_seq)
+            x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
+            logits = model(x, area_seq, cloudy_seq)
             loss = criterion(logits, labels)
 
         # Scale loss by accumulation steps to maintain proper gradient magnitude
@@ -373,7 +393,8 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
     return avg_loss, metrics
 
 
-def evaluate(model, loader, criterion, device, num_classes=4, amp=False):
+def evaluate(model, loader, criterion, device, num_classes=4, amp=False,
+             normalize_fn=None):
     """Evaluate model and return loss + metrics."""
     model.eval()
     total_loss = 0.0
@@ -386,19 +407,23 @@ def evaluate(model, loader, criterion, device, num_classes=4, amp=False):
 
     with torch.no_grad():
         for batch in loader:
-            img_seq, area_seq, cloudy_seq, labels, _ = batch
+            img_seq, area_seq, cloudy_seq, labels, boa = unpack_batch(batch)
 
-            img_seq = img_seq.to(device)
-            area_seq = area_seq.to(device)
-            cloudy_seq = cloudy_seq.to(device)
-            labels = labels.to(device)
+            img_seq = img_seq.to(device, non_blocking=True)
+            area_seq = area_seq.to(device, non_blocking=True)
+            cloudy_seq = cloudy_seq.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            if boa is not None:
+                boa = boa.to(device, non_blocking=True)
 
             if amp:
                 with torch.autocast(device_type='cuda', dtype=amp_dtype):
-                    logits = model(img_seq, area_seq, cloudy_seq)
+                    x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
+                    logits = model(x, area_seq, cloudy_seq)
                     loss = criterion(logits, labels)
             else:
-                logits = model(img_seq, area_seq, cloudy_seq)
+                x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
+                logits = model(x, area_seq, cloudy_seq)
                 loss = criterion(logits, labels)
 
             total_loss += loss.item()
@@ -676,28 +701,41 @@ def train(config: dict):
         val_ids = val_ids[:max_lakes]
         test_ids = test_ids[:max_lakes]
 
-    # Build file paths from IDs
-    nc_dir = Path(config["nc_dir"])
-    train_paths = [nc_dir / f"{lid}.nc" for lid in train_ids]
-    val_paths = [nc_dir / f"{lid}.nc" for lid in val_ids]
-    test_paths = [nc_dir / f"{lid}.nc" for lid in test_ids]
+    # Resolve which lakes actually have data on disk. The two backends store
+    # things differently, so `_have` is what the rest of the function trusts.
+    if config.get("use_cache"):
+        cache_root = Path(config["cache_root"])
+        probe_band = (config.get("cache_bands") or ["B04"])[0]
+        def _have(lid):
+            return (cache_root / probe_band / f"{lid}.b2nd").exists()
+        train_paths = val_paths = test_paths = []      # unused on the cache path
+    else:
+        nc_dir = Path(config["nc_dir"])
+        def _have(lid):
+            return (nc_dir / f"{lid}.nc").exists()
+        train_paths = [nc_dir / f"{lid}.nc" for lid in train_ids if _have(lid)]
+        val_paths = [nc_dir / f"{lid}.nc" for lid in val_ids if _have(lid)]
+        test_paths = [nc_dir / f"{lid}.nc" for lid in test_ids if _have(lid)]
 
-    # Filter to existing files
-    train_paths = [p for p in train_paths if p.exists()]
-    val_paths = [p for p in val_paths if p.exists()]
-    test_paths = [p for p in test_paths if p.exists()]
+    train_ids = [lid for lid in train_ids if _have(lid)]
+    val_ids = [lid for lid in val_ids if _have(lid)]
+    test_ids = [lid for lid in test_ids if _have(lid)]
 
-    print(f"Found files: train={len(train_paths)}, val={len(val_paths)}, test={len(test_paths)}")
+    print(f"Found data: train={len(train_ids)}, val={len(val_ids)}, test={len(test_ids)}")
+    if not train_ids:
+        raise ValueError(
+            "No training lakes found on disk. Check --cache_root/--nc_dir and "
+            "that the split IDs match what was built.")
 
     # Compute class weights from training set for weighted CrossEntropyLoss
     if labels_dict is not None:
-        train_labels = [labels_dict[lid] for lid in train_ids if (nc_dir / f"{lid}.nc").exists()]
+        train_labels = [labels_dict[lid] for lid in train_ids]
     else:
         df_labels = pd.read_csv(config["labels_csv"])
         df_labels = df_labels.dropna(subset=[config.get("id_col", "new_id"), config.get("label_col", "label_rines")])
         label_map = dict(zip(df_labels[config.get("id_col", "new_id")],
                              df_labels[config.get("label_col", "label_rines")].astype(int)))
-        train_labels = [label_map[lid] for lid in train_ids if lid in label_map and (nc_dir / f"{lid}.nc").exists()]
+        train_labels = [label_map[lid] for lid in train_ids if lid in label_map]
 
     label_counts = Counter(train_labels)
     num_classes = config.get("num_classes", 5)
@@ -739,11 +777,47 @@ def train(config: dict):
         dataset_kwargs['id_col'] = config.get("id_col", "new_id")
         dataset_kwargs['label_col'] = config.get("label_col", "label_rines")
 
-    # Create datasets (preload only training set to RAM if requested)
-    preload_to_ram = config.get("preload_to_ram", False)
-    train_dataset = LakeDataset(train_paths, preload_to_ram=preload_to_ram, **dataset_kwargs)
-    val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
-    test_dataset = LakeDataset(test_paths, preload_to_ram=False, **dataset_kwargs)
+    # Create datasets. Two paths:
+    #   cache  — blosc2 uint16, normalized on the GPU (fast; see build_cache.py)
+    #   legacy — float32 NetCDF decompressed per read (the ESSD path)
+    use_cache = bool(config.get("use_cache", False))
+    normalize_fn = None
+
+    if use_cache:
+        cache_root = config.get("cache_root")
+        if not cache_root:
+            raise ValueError("--use_cache requires --cache_root")
+        from lakevision.data.cached_dataset import (
+            CachedLakeDataset, normalize_batch, worker_init as _worker_init,
+        )
+        normalize_fn = normalize_batch
+
+        cache_kwargs = dict(
+            bands=config.get("cache_bands") or ["B04", "B03", "B02"],
+            mask=config.get("cache_mask"),
+            labels_dict=labels_dict,
+            seq_len=config.get("seq_len", 153),
+            scalar_var=config.get("scalar_var", "p_water"),
+            normalize_scalar=config.get("normalize_scalar", False),
+        )
+        print(f"\n--- CACHED DATASET ---")
+        print(f"cache_root:       {cache_root}")
+        print(f"bands:            {cache_kwargs['bands']}")
+        print(f"mask:             {cache_kwargs['mask']}")
+        print(f"scalar_var:       {cache_kwargs['scalar_var']} "
+              f"(min-max: {cache_kwargs['normalize_scalar']})")
+
+        train_dataset = CachedLakeDataset(cache_root, lake_ids=train_ids, **cache_kwargs)
+        val_dataset = CachedLakeDataset(cache_root, lake_ids=val_ids, **cache_kwargs)
+        test_dataset = CachedLakeDataset(cache_root, lake_ids=test_ids, **cache_kwargs)
+        channels_to_load = list(cache_kwargs["bands"]) + (
+            [cache_kwargs["mask"]] if cache_kwargs["mask"] else [])
+    else:
+        _worker_init = None
+        preload_to_ram = config.get("preload_to_ram", False)
+        train_dataset = LakeDataset(train_paths, preload_to_ram=preload_to_ram, **dataset_kwargs)
+        val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
+        test_dataset = LakeDataset(test_paths, preload_to_ram=False, **dataset_kwargs)
 
     # Wrap training set with augmentations if requested.
     # Default is random-per-epoch (one disk read per lake per epoch). The
@@ -778,8 +852,12 @@ def train(config: dict):
 
     # Approximate per-sample MB as handed to the collate function:
     # seq_len * channels * H * W * 4 bytes (float32).
+    # The cache hands off uint16 (2 bytes); the legacy path hands off float32
+    # (4 bytes). That factor of two is what decides how many workers fit.
     n_ch = len(channels_to_load)
-    sample_mb = sample_size_mb(config.get("seq_len", 153), n_ch)
+    bytes_per_elem = 2 if use_cache else 4
+    sample_mb = sample_size_mb(config.get("seq_len", 153), n_ch,
+                               bytes_per_elem=bytes_per_elem)
 
     host_mem_budget_gb = config.get("host_mem_budget_gb")
     if host_mem_budget_gb:
@@ -819,6 +897,7 @@ def train(config: dict):
         pin_memory=True,
         prefetch_factor=prefetch_factor if num_workers > 0 else None,
         persistent_workers=False,
+        worker_init_fn=_worker_init,   # pins blosc2 to 1 thread per worker
     )
     val_loader = DataLoader(
         val_dataset,
@@ -828,6 +907,7 @@ def train(config: dict):
         pin_memory=True,
         prefetch_factor=prefetch_factor if num_workers > 0 else None,
         persistent_workers=False,
+        worker_init_fn=_worker_init,
     )
 
     # Create model
@@ -914,8 +994,12 @@ def train(config: dict):
 
         accumulation_steps = config.get("accumulation_steps", 1)
         amp = config.get("amp", False)
-        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps, amp=amp)
-        val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes, amp=amp)
+        train_loss, train_metrics = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, num_classes,
+            accumulation_steps, amp=amp, normalize_fn=normalize_fn)
+        val_loss, val_metrics = evaluate(
+            model, val_loader, criterion, device, num_classes, amp=amp,
+            normalize_fn=normalize_fn)
 
         epoch_time = time.time() - epoch_start_time
         epoch_times.append(epoch_time)
@@ -1017,6 +1101,7 @@ def train(config: dict):
         pin_memory=True,
         prefetch_factor=prefetch_factor if num_workers > 0 else None,
         persistent_workers=False,  # one-shot eval; no benefit from persistence
+        worker_init_fn=_worker_init,
     )
 
     # Load best model for test evaluation
@@ -1024,7 +1109,9 @@ def train(config: dict):
         model.load_state_dict(torch.load(config["save_path"], map_location=device))
         print("Loaded best model for test evaluation")
 
-    test_loss, test_metrics = evaluate(model, test_loader, criterion, device, num_classes, amp=config.get("amp", False))
+    test_loss, test_metrics = evaluate(
+        model, test_loader, criterion, device, num_classes,
+        amp=config.get("amp", False), normalize_fn=normalize_fn)
 
     print(f"\nTest Results:")
     print(f"  Loss:      {test_loss:.4f}")
@@ -1075,8 +1162,35 @@ def main():
                         help="Optional path(s) to CSV(s) whose lakes form a "
                              "held-out test set (cross-year baseline). When "
                              "set, labels_csv is split 80/20 into train/val.")
-    parser.add_argument("--nc_dir", type=str, required=True,
-                        help="Directory containing lake NC files")
+    parser.add_argument("--nc_dir", type=str, default=None,
+                        help="Directory containing lake NC files (legacy path; "
+                             "not needed with --use_cache)")
+
+    # ------------------------- blosc2 cache backend -------------------------
+    # Built by engine/preprocessing/build_cache.py. Stores uint16 raw DN and
+    # defers (DN/DN_SCALE + boa)/10000 to the GPU, which halves the dataloader
+    # queue and is what makes bs=32-64 fit in host RAM.
+    parser.add_argument("--use_cache", action="store_true", default=False,
+                        help="Read from the blosc2 cache instead of NetCDF.")
+    parser.add_argument("--cache_root", type=str, default=None,
+                        help="Cache directory (required with --use_cache).")
+    parser.add_argument("--cache_bands", nargs="+", default=None,
+                        help="Bands to load from the cache, in model channel "
+                             "order. Default: B04 B03 B02 (red, green, blue).")
+    parser.add_argument("--cache_mask", type=str, default=None,
+                        choices=["lake_boundary", "water_mask_ndwi"],
+                        help="Append a mask as a trailing channel. "
+                             "'lake_boundary' is the static Dunmire polygon; "
+                             "'water_mask_ndwi' is the per-timestep NDWI mask.")
+    parser.add_argument("--scalar_var", type=str, default="p_water",
+                        help="Per-timestep scalar feeding area_seq. 'p_water' "
+                             "is the Dunmire 2025 S2_water fractional extent.")
+    parser.add_argument("--normalize_scalar", action="store_true", default=False,
+                        help="Min-max the scalar per sample. OFF by default: "
+                             "p_water is already a physical [0,1] fraction, and "
+                             "per-sample min-max would erase cross-lake "
+                             "amplitude (a lake that only half-fills would look "
+                             "like one that fills completely).")
 
     # -------------------------------------------------------------------
     # ESSD baseline defaults
@@ -1248,6 +1362,10 @@ def main():
                         help="Disable wandb logging")
 
     args = parser.parse_args()
+    if args.use_cache and not args.cache_root:
+        parser.error("--use_cache requires --cache_root")
+    if not args.use_cache and not args.nc_dir:
+        parser.error("--nc_dir is required unless --use_cache is set")
     config = vars(args)
     # Translate --no_stratify (action flag) to config["stratify"] so existing
     # code that reads config.get("stratify", True) keeps working.
@@ -1273,6 +1391,10 @@ def main():
         # Ensure required paths are set
         config["labels_csv"] = args.labels_csv
         config["nc_dir"] = args.nc_dir
+        config["use_cache"] = args.use_cache
+        config["cache_root"] = args.cache_root
+        config["cache_bands"] = args.cache_bands
+        config["cache_mask"] = args.cache_mask
         config["test_labels_csv"] = args.test_labels_csv
         config["train_ids_file"] = args.train_ids_file
         config["val_ids_file"] = args.val_ids_file

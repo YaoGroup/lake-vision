@@ -123,3 +123,59 @@ class TestLoaderMemoryPlan:
         w, _, _ = self._plan(batch_size=1, sample_mb=1,
                              host_mem_budget_gb=10_000, max_workers=16)
         assert w == 16
+
+
+class SixTupleDataset(CountingDataset):
+    """Stand-in for CachedLakeDataset, which appends a BOA offset."""
+
+    def __getitem__(self, idx):
+        img, area, cloudy, label, lid = super().__getitem__(idx)
+        boa = torch.zeros(self.shape[0])
+        return img, area, cloudy, label, lid, boa
+
+
+class TestTupleAgnosticWrappers:
+    """CachedLakeDataset returns 6 elements; the wrappers must not hard-unpack 5."""
+
+    def test_random_d4_passes_through_sixth_element(self):
+        ds = RandomD4Dataset(SixTupleDataset(n=3), seed=0)
+        sample = ds[0]
+        assert len(sample) == 6, f"expected 6-tuple, got {len(sample)}"
+        assert sample[5].shape == (3,), "BOA offset was dropped or reshaped"
+
+    def test_expand_passes_through_sixth_element(self):
+        ds = AugmentedDatasetWrapper(SixTupleDataset(n=3))
+        assert len(ds[0]) == 6
+
+    def test_five_tuple_still_works(self):
+        """LakeDataset's 5-tuple must keep working unchanged."""
+        assert len(RandomD4Dataset(CountingDataset(n=3))[0]) == 5
+        assert len(AugmentedDatasetWrapper(CountingDataset(n=3))[0]) == 5
+
+    def test_augmentation_still_applied_to_images_only(self):
+        base = SixTupleDataset(n=1, H=4, W=4)
+        ds = RandomD4Dataset(base, seed=0)
+        seen = set()
+        for e in range(200):
+            ds.set_epoch(e)
+            s = ds[0]
+            seen.add(s[0].numpy().tobytes())
+            assert torch.equal(s[5], torch.zeros(base.shape[0]))
+        assert len(seen) == len(AUGMENTATIONS) + 1
+
+
+class TestUnpackBatch:
+    @staticmethod
+    def _unpack(batch):
+        from engine.training.run_training import unpack_batch
+        return unpack_batch(batch)
+
+    def test_five_tuple_gives_no_boa(self):
+        b = (1, 2, 3, 4, "id")
+        img, area, cloudy, labels, boa = self._unpack(b)
+        assert (img, area, cloudy, labels) == (1, 2, 3, 4)
+        assert boa is None, "legacy path must not invent a BOA offset"
+
+    def test_six_tuple_yields_boa(self):
+        b = (1, 2, 3, 4, "id", 99)
+        assert self._unpack(b)[4] == 99
