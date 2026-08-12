@@ -19,8 +19,18 @@ setup(
         "rasterio>=1.3.0",
         "pillow>=9.5.0",
         "scikit-learn>=1.3.0",
+        "netCDF4>=1.6.0",
+        "blosc2>=2.5.0",
     ],
     extras_require={
+        # Composite synthesis only (engine/preprocessing/synthesize_region.py,
+        # lakevision/data/synthesis.py). Both import these lazily inside
+        # functions, so the core package works without them.
+        "synthesis": [
+            "geopandas>=0.14.0",
+            "affine>=2.4.0",
+            "shapely>=2.0.0",
+        ],
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
