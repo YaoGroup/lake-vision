@@ -28,7 +28,12 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lakevision.data import LakeDataset
-from lakevision.data.transforms import AugmentedDatasetWrapper, AUGMENTATIONS
+from lakevision.data.loader_plan import plan_loader_workers, sample_size_mb
+from lakevision.data.transforms import (
+    AugmentedDatasetWrapper,
+    RandomD4Dataset,
+    AUGMENTATIONS,
+)
 from lakevision.models.classifier import LakeDrainageClassifier
 
 
@@ -740,41 +745,88 @@ def train(config: dict):
     val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
     test_dataset = LakeDataset(test_paths, preload_to_ram=False, **dataset_kwargs)
 
-    # Wrap training set with augmentations if requested
+    # Wrap training set with augmentations if requested.
+    # Default is random-per-epoch (one disk read per lake per epoch). The
+    # deterministic 8x expansion re-reads each lake once per symmetry, which is
+    # 8x the I/O for the same augmentation distribution; it is kept only to
+    # reproduce the ESSD augmented runs via --augment_mode expand.
     if config.get("augment", False):
         base_size = len(train_dataset)
-        train_dataset = AugmentedDatasetWrapper(train_dataset)
+        augment_mode = config.get("augment_mode", "random")
         print(f"\n--- AUGMENTATION ---")
         print(f"Augmentations: {list(AUGMENTATIONS.keys())}")
-        print(f"Training set: {base_size} -> {len(train_dataset)} samples ({len(train_dataset) // base_size}x)")
+        if augment_mode == "expand":
+            train_dataset = AugmentedDatasetWrapper(train_dataset)
+            print(f"Mode: expand (deterministic 8x — ESSD-compatible)")
+            print(f"Training set: {base_size} -> {len(train_dataset)} samples "
+                  f"({len(train_dataset) // base_size}x)")
+            print(f"NOTE: this reads every lake {len(train_dataset) // base_size}x per epoch.")
+        else:
+            train_dataset = RandomD4Dataset(train_dataset, seed=seed)
+            print(f"Mode: random (one random D4 symmetry per sample per epoch)")
+            print(f"Training set: {base_size} samples, 1 read per lake per epoch")
 
     # Create loaders.
-    # Per-sample img_seq is ~640 MB (153 timesteps × 4 channels × 512² × float32).
-    # RAM = workers × prefetch_factor × batch_size × ~640 MB.
-    # At 12 workers × 2 × 8 × 640 MB ≈ 123 GB queued; sized for --mem=256GB
-    # with ~35% headroom for transient peaks + glibc fragmentation.
+    # Per-sample img_seq is ~640 MB (153 timesteps × 4 channels × 512² × float32),
+    # so the in-flight queue is workers × prefetch_factor × batch_size × 640 MB.
+    # That scales with batch_size: 12 workers × 2 prefetch is ~123 GB at bs=8 but
+    # ~984 GB at bs=64. Pass --host_mem_budget_gb to size workers against the
+    # budget instead of hardcoding them.
     # pin_memory=True enables async host→GPU transfer (overlap with compute).
+    batch_size = config.get("batch_size", 8)
+    prefetch_factor = 2
+
+    # Approximate per-sample MB as handed to the collate function:
+    # seq_len * channels * H * W * 4 bytes (float32).
+    n_ch = len(channels_to_load)
+    sample_mb = sample_size_mb(config.get("seq_len", 153), n_ch)
+
+    host_mem_budget_gb = config.get("host_mem_budget_gb")
+    if host_mem_budget_gb:
+        num_workers, prefetch_factor, projected_gb = plan_loader_workers(
+            batch_size=batch_size,
+            sample_mb=sample_mb,
+            host_mem_budget_gb=host_mem_budget_gb,
+            max_workers=config.get("num_workers", 16),
+            prefetch_factor=prefetch_factor,
+        )
+        print(f"\n--- DATALOADER MEMORY PLAN ---")
+        print(f"Per-sample:      {sample_mb:.0f} MB ({n_ch} channels x {config.get('seq_len', 153)} timesteps)")
+        print(f"Budget:          {host_mem_budget_gb:.0f} GB")
+        print(f"Chosen:          {num_workers} workers x {prefetch_factor} prefetch x bs {batch_size}")
+        print(f"Projected queue: {projected_gb:.0f} GB")
+    else:
+        # Legacy path: fixed worker count. Safe at bs=8, OOMs the node at bs>=32.
+        num_workers = config.get("num_workers", 12)
+        projected_gb = num_workers * prefetch_factor * batch_size * sample_mb / 1024
+        print(f"\n--- DATALOADER ---")
+        print(f"{num_workers} workers x {prefetch_factor} prefetch x bs {batch_size} "
+              f"-> ~{projected_gb:.0f} GB queued")
+        if projected_gb > 200:
+            print(f"  WARNING: projected queue is {projected_gb:.0f} GB. Pass "
+                  f"--host_mem_budget_gb to size workers against your --mem "
+                  f"instead of guessing.")
+
     # persistent_workers MUST be False here: with separate train/val loaders,
     # persistence keeps train workers alive while val workers spawn — doubling
-    # worker processes and OOM-killing the job at the train→val transition.
-    # The ~5–10s/epoch worker spin-up tax is the cost of safety.
-    num_workers = config.get("num_workers", 12)
+    # worker processes and OOM-killing the job at the train->val transition.
+    # The ~5-10s/epoch worker spin-up tax is the cost of safety.
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.get("batch_size", 8),
+        batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
         persistent_workers=False,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.get("batch_size", 8),
+        batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
         persistent_workers=False,
     )
 
@@ -794,6 +846,7 @@ def train(config: dict):
         num_classes=num_classes,
         frontcnn_base_channels=config.get("frontcnn_base_channels", 8),
         frontcnn_num_layers=config.get("frontcnn_num_layers", 4),
+        frontcnn_out_hw=config.get("frontcnn_out_hw"),
         clstm_hidden=config.get("clstm_hidden", 32),
         clstm_kernel=config.get("clstm_kernel", 3),
         slstm_hidden=config.get("slstm_hidden", 16),
@@ -958,11 +1011,11 @@ def train(config: dict):
     # Final test evaluation
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.get("batch_size", 8),
+        batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
         persistent_workers=False,  # one-shot eval; no benefit from persistence
     )
 
@@ -1071,6 +1124,15 @@ def main():
     parser.add_argument("--use_scheduler", action="store_true",
                         help="Enable ReduceLROnPlateau LR scheduler "
                              "(off by default in ESSD baseline).")
+    parser.add_argument("--host_mem_budget_gb", type=float, default=None,
+                        help="RAM the DataLoader queue may occupy, in GB. When "
+                             "set, num_workers is chosen so that "
+                             "workers x prefetch x batch_size x sample_size fits "
+                             "the budget — which is what keeps large batches from "
+                             "OOM-killing the node. Use ~65%% of --mem, leaving "
+                             "room for page cache and the parent process "
+                             "(e.g. --mem=500G -> --host_mem_budget_gb 325). "
+                             "When unset, --num_workers is used verbatim.")
     parser.add_argument("--num_workers", type=int, default=12,
                         help="DataLoader workers. Each worker buffers prefetch_factor "
                              "× batch_size samples (~640 MB each), so RAM grows as "
@@ -1112,6 +1174,14 @@ def main():
                         help="Name of cloudy_seq variable in NC files")
     parser.add_argument("--augment", action="store_true", default=False,
                         help="Apply spatial augmentations (random flips + 90-degree rotations) to training data")
+    parser.add_argument("--augment_mode", type=str, default="random",
+                        choices=["random", "expand"],
+                        help="'random' (default): one random D4 symmetry per "
+                             "sample per epoch — 1 disk read per lake per epoch. "
+                             "'expand': deterministic 8x dataset expansion, which "
+                             "re-reads every lake 8x per epoch (8x the I/O for the "
+                             "same augmentation distribution). Use 'expand' only "
+                             "to reproduce the ESSD augmented runs.")
 
     # Model feature flags
     parser.add_argument("--use_imgseq", action="store_true", default=True,
@@ -1145,6 +1215,15 @@ def main():
                         help="Number of output classes (default 5 for ESSD baseline)")
     parser.add_argument("--frontcnn_base_channels", type=int, default=8)
     parser.add_argument("--frontcnn_num_layers", type=int, default=4)
+    parser.add_argument("--frontcnn_out_hw", type=str, default=None,
+                        help="Spatial size fed to the CLSTM, as 'H,W'. Default "
+                             "(unset) keeps the conv stack's own output — 32x32 "
+                             "for 512x512 input with 4 layers. Pooling DOWN is "
+                             "allowed; requesting a size larger than the conv "
+                             "output now raises instead of silently upsampling. "
+                             "The ESSD baselines ran '64,64' with 4 layers, which "
+                             "upsampled 32->64 and cost 4x in the CLSTM for no "
+                             "gain; pass '64,64' only to reproduce those runs.")
     parser.add_argument("--clstm_hidden", type=int, default=32)
     parser.add_argument("--slstm_hidden", type=int, default=16)
     parser.add_argument("--classhead_hidden", type=int, default=64)
@@ -1173,6 +1252,14 @@ def main():
     # Translate --no_stratify (action flag) to config["stratify"] so existing
     # code that reads config.get("stratify", True) keeps working.
     config["stratify"] = not config.pop("no_stratify", False)
+
+    # "64,64" -> (64, 64); unset stays None (= keep the conv stack's own output)
+    if config.get("frontcnn_out_hw"):
+        try:
+            h, w = (int(v) for v in str(config["frontcnn_out_hw"]).split(","))
+        except ValueError:
+            parser.error("--frontcnn_out_hw must be 'H,W' (e.g. '32,32')")
+        config["frontcnn_out_hw"] = (h, w)
 
     # Initialize wandb
     if WANDB_AVAILABLE and not args.no_wandb:

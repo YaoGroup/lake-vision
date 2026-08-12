@@ -29,6 +29,16 @@ class AugmentedDatasetWrapper(torch.utils.data.Dataset):
     once as the original, and once per augmentation. The augmentation for each
     index is fixed (not random), so the dataset is fully deterministic.
 
+    .. warning::
+        This multiplies **disk reads** by ``n_versions``, not just sample count:
+        each of the 8 D4 variants calls ``base_dataset[base_idx]`` separately, so
+        every lake is decoded 8x per epoch. At ~640 MB/sample that dominates
+        epoch time. Prefer :class:`RandomD4Dataset`, which reads once per lake
+        per epoch and picks a random symmetry — same expected augmentation
+        distribution, 1/8 the I/O.
+
+        Kept for reproducing the ESSD augmented runs, which used this class.
+
     Args:
         base_dataset: The original dataset (e.g., LakeDataset)
         augmentations: Dict of {name: transform_fn}. Each transform_fn takes
@@ -55,6 +65,65 @@ class AugmentedDatasetWrapper(torch.utils.data.Dataset):
         aug_idx = idx % self.n_versions
 
         img_seq, area_seq, cloudy_seq, label, lake_id = self.base_dataset[base_idx]
+
+        if self.transforms[aug_idx] is not None:
+            img_seq = self.transforms[aug_idx](img_seq)
+
+        return img_seq, area_seq, cloudy_seq, label, lake_id
+
+
+class RandomD4Dataset(torch.utils.data.Dataset):
+    """
+    Applies one uniformly-random D4 symmetry per sample, per access.
+
+    Same length as the base dataset, so each lake is read from disk **once** per
+    epoch instead of once per symmetry. Over many epochs a sample is seen under
+    every symmetry with equal probability, which is the standard formulation of
+    random spatial augmentation and gives the same regularization as the 8x
+    deterministic expansion at 1/8 the I/O.
+
+    The transform is applied identically across all timesteps, preserving
+    temporal coherence.
+
+    Args:
+        base_dataset: The original dataset (e.g., LakeDataset)
+        augmentations: Dict of {name: transform_fn}. Defaults to AUGMENTATIONS.
+            The identity is included implicitly, so a sample has a
+            1/(len+1) chance of being returned untransformed.
+        seed: Optional base seed. When set, the symmetry chosen for a given
+            (epoch, index) is reproducible; call :meth:`set_epoch` each epoch.
+            When None, uses global torch RNG (which DataLoader workers seed
+            per-epoch already).
+
+    Example:
+        >>> train = RandomD4Dataset(LakeDataset(...))   # same length, 8x fewer reads
+    """
+
+    def __init__(self, base_dataset, augmentations=None, seed=None):
+        self.base_dataset = base_dataset
+        self.augmentations = augmentations or AUGMENTATIONS
+        self.transforms = [None] + list(self.augmentations.values())
+        self.n_versions = len(self.transforms)
+        self.seed = seed
+        self.epoch = 0
+
+    def set_epoch(self, epoch):
+        """Advance the epoch so seeded runs draw fresh symmetries."""
+        self.epoch = epoch
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        img_seq, area_seq, cloudy_seq, label, lake_id = self.base_dataset[idx]
+
+        if self.seed is None:
+            aug_idx = int(torch.randint(self.n_versions, (1,)).item())
+        else:
+            g = torch.Generator().manual_seed(
+                (self.seed * 1_000_003 + self.epoch) * 1_000_003 + idx
+            )
+            aug_idx = int(torch.randint(self.n_versions, (1,), generator=g).item())
 
         if self.transforms[aug_idx] is not None:
             img_seq = self.transforms[aug_idx](img_seq)

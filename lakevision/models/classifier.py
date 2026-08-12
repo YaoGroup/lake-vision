@@ -54,9 +54,17 @@ class LakeDrainageClassifier(nn.Module):
         input_W                 (int): input image width (default: 512)
         frontcnn_base_channels  (int) base channels for FrontCNN (default: 8)
         frontcnn_num_layers     (int): number of layers in frontcnn (default: 4)
-        frontcnn_out_hw         (tuple): output spatial dimensions after FrontCNN (default: (64,64))
+        frontcnn_out_hw         (tuple or None): output spatial dimensions after FrontCNN (default: None)
+                                        None keeps the conv stack's natural output (input_H / 2**num_layers,
+                                        e.g. 32x32 for 512x512 input with 4 layers). A tuple pools *down*
+                                        to that size; a size larger than the conv output raises.
                                         If set to (1,1), uses regular LSTM instead of ConvLSTM
                                         (vector mode - more parameter efficient, no spatial reasoning)
+
+                                        NOTE: the ESSD baselines ran with (64,64) and num_layers=4, which
+                                        silently upsampled 32x32 -> 64x64 and made the CLSTM 4x more
+                                        expensive for no gain. To reproduce those runs bit-for-bit, pass
+                                        frontcnn_out_hw=(64,64) explicitly (see docs/PROVENANCE_ESSD.md).
         frontcnn_pool           (str): pooling type for FrontCNN ('max, 'avg', 'none') (default: 'max')
         clstm_hidden            (int): hidden channels for CLSTM (default: 32)
         clstm_kernel            (int): kernel size for CLSTM (default: 3)
@@ -124,7 +132,7 @@ class LakeDrainageClassifier(nn.Module):
         # FrontCNN configuration
         frontcnn_base_channels=8,
         frontcnn_num_layers=4,
-        frontcnn_out_hw=(64,64),
+        frontcnn_out_hw=None,
         frontcnn_pool='max',
         # CLSTM configuration
         clstm_hidden=32,
@@ -181,9 +189,18 @@ class LakeDrainageClassifier(nn.Module):
             # Store frontcnn_out_hw for forward pass logic
             self.frontcnn_out_hw = frontcnn_out_hw
 
+            # Spatial size the CLSTM will actually see. With out_hw=None the conv
+            # stack's own output wins: each layer halves H/W, so 512 -> 32 at 4
+            # layers. Used for reporting and for the vector-mode check.
+            if frontcnn_out_hw is None:
+                self.effective_hw = (input_H // 2 ** frontcnn_num_layers,
+                                     input_W // 2 ** frontcnn_num_layers)
+            else:
+                self.effective_hw = tuple(frontcnn_out_hw)
+
             # Determine if we're using vector mode (1x1 output -> regular LSTM)
             # or spatial mode (larger output -> ConvLSTM)
-            self.use_vector_lstm = (frontcnn_out_hw == (1, 1))
+            self.use_vector_lstm = (self.effective_hw == (1, 1))
 
             # (1) FrontCNN for imagery (RGB + optional spectral bands)
             self.frontcnn = FrontCNN(
@@ -467,7 +484,7 @@ class LakeDrainageClassifier(nn.Module):
             if self.use_vector_lstm:
                 temporal_str = "LSTM (vector mode, 1x1 spatial)"
             else:
-                temporal_str = f"ConvLSTM (spatial mode, {self.frontcnn_out_hw[0]}x{self.frontcnn_out_hw[1]})"
+                temporal_str = f"ConvLSTM (spatial mode, {self.effective_hw[0]}x{self.effective_hw[1]})"
         else:
             temporal_str = "N/A (no imgseq)"
 

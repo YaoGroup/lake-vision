@@ -25,12 +25,19 @@ class TestFrontCNN:
         x = torch.randn(2, 13, 3, 512, 512)  # [B=2, T=13, C=4, H=512, W=512]
         out = model(x)
 
-        # with 3 layers and default out_hw=(32,32) we expect output shape to be [B=2, T=13, C=32, H=32, W=32]
-        assert out.shape == (2, 13, 32, 32, 32), f"Expected output shape (2, 13, 32, 32, 32), but got {out.shape}"
+        # out_hw now defaults to None (no resize), so 3 layers on 512x512 gives
+        # 512 / 2**3 = 64. Channels are base * 2**(num_layers-1) = 32.
+        assert out.shape == (2, 13, 32, 64, 64), f"Expected output shape (2, 13, 32, 64, 64), but got {out.shape}"
 
         # check for nans or infs
         assert not torch.isnan(out).any(), "Output contains NaNs"
         assert not torch.isinf(out).any(), "Output contains Infs"
+
+    def test_explicit_downpool(self):
+        """Explicitly requesting a smaller out_hw still pools down."""
+        model = FrontCNN(in_channels=3, base_channels=8, num_layers=3, out_hw=(32, 32))
+        out = model(torch.randn(2, 13, 3, 512, 512))
+        assert out.shape == (2, 13, 32, 32, 32), f"Expected (2, 13, 32, 32, 32), got {out.shape}"
 
     def test_output_channels(self):
         """Test output_channels attribute."""
@@ -420,3 +427,42 @@ class TestGlobalPooling:
 
         # Output should have 4 channels (2 original * 2 for avg+max)
         assert out.shape == (1, 4), f"Expected shape (1, 4), got {out.shape}"
+
+class TestFrontCNNOutHW:
+    """FrontCNN spatial sizing — the ESSD baseline silently upsampled 32->64."""
+
+    def test_none_keeps_conv_output(self):
+        """out_hw=None keeps H/2**num_layers, no resize."""
+        cnn = FrontCNN(in_channels=3, base_channels=8, num_layers=4, out_hw=None)
+        out = cnn(torch.randn(1, 2, 3, 512, 512))
+        assert out.shape[-2:] == (32, 32), f"expected 32x32, got {tuple(out.shape[-2:])}"
+
+    def test_upsampling_is_refused(self):
+        """Requesting a size larger than the conv output must raise, not upsample.
+
+        This is the ESSD baseline's configuration: 4 layers on 512x512 gives
+        32x32, and out_hw=(64,64) replicated it back up, quadrupling CLSTM cost
+        for zero added information.
+        """
+        cnn = FrontCNN(in_channels=3, base_channels=8, num_layers=4, out_hw=(64, 64))
+        with pytest.raises(ValueError, match="would upsample"):
+            cnn(torch.randn(1, 2, 3, 512, 512))
+
+    def test_pooling_down_still_works(self):
+        """Genuine downsampling remains available."""
+        cnn = FrontCNN(in_channels=3, base_channels=8, num_layers=4, out_hw=(8, 8))
+        out = cnn(torch.randn(1, 2, 3, 512, 512))
+        assert out.shape[-2:] == (8, 8)
+
+    def test_exact_match_is_a_noop(self):
+        """out_hw equal to the conv output neither pools nor raises."""
+        cnn = FrontCNN(in_channels=3, base_channels=8, num_layers=3, out_hw=(64, 64))
+        out = cnn(torch.randn(1, 2, 3, 512, 512))
+        assert out.shape[-2:] == (64, 64)
+
+    def test_pool_none_mismatch_raises_valueerror(self):
+        """pool='none' with a size mismatch raises ValueError (was NameError)."""
+        cnn = FrontCNN(in_channels=3, base_channels=8, num_layers=4,
+                       out_hw=(8, 8), pool='none')
+        with pytest.raises(ValueError, match="pool='none'"):
+            cnn(torch.randn(1, 2, 3, 512, 512))

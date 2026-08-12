@@ -16,8 +16,11 @@ class FrontCNN(nn.Module):
         in_channels (int): number of input channels (e.g., 4 for RGB and mask)
         base_channels (int): number of base channels for the first convolutional layer
         num_layers (int): number of convolutional layers (each with Conv2d -> LeakyReLU -> MaxPool2d)
-        out_hw (tuple): output height and width after convolutions and pooling
-            NOTE: pooling will happen if the number of layers doesn't reduce the spatial dimensions to out_hw
+        out_hw (tuple or None): output height and width after convolutions.
+            None (default) keeps whatever the conv stack produces — H/2**num_layers.
+            A tuple pools *down* to that size; requesting a size larger than the
+            conv output raises, since upsampling adds no information while
+            multiplying downstream CLSTM cost by (target/conv)**2.
         pool (str): type of pooling to use (select from 'max', 'avg', or 'none')
 
     Input:
@@ -47,9 +50,9 @@ class FrontCNN(nn.Module):
         >>> out = frontcnn(x) # output tensor [B=8, T=152, C_out=64, H_out=1, W_out=1]
     
     """
-    def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=(32,32), pool='max'):
+    def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=None, pool='max'):
         super(FrontCNN, self).__init__()
-        
+
         if pool not in ['max', 'avg', 'none']:
             raise ValueError(f"pool must be one of: 'max', 'avg', or 'none', but got '{pool}'")
 
@@ -80,22 +83,34 @@ class FrontCNN(nn.Module):
         x = x.view(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
         x = self.conv_block(x) # apply convolutional layers -> e.g., [B*T, C=base_channels*(2**num_layers-1), H_out, W_out]
         _, C_out, H_conv, W_conv = x.shape
-        
-        # conditional pooling:
-        target_h, target_w = self.out_hw
-        if (H_conv, W_conv) != (target_h, target_w):
-            # need to pool
-            if self.pool == 'max':
-                x = F.adaptive_max_pool2d(x, self.out_hw)
-            elif self.pool == 'avg':
-                x = F.adaptive_avg_pool2d(x, self.out_hw)
-            else:
-                # If pool='none' but dimensions don't match, raise an error
+
+        # Conditional pooling. out_hw=None means "keep whatever the conv stack
+        # produced" — the common case, and the only one that never wastes compute.
+        if self.out_hw is not None:
+            target_h, target_w = self.out_hw
+            if (target_h > H_conv) or (target_w > W_conv):
+                # Upsampling a feature map back up is never intended: it adds no
+                # information and multiplies the downstream CLSTM cost by
+                # (target/conv)^2. The ESSD baseline did exactly this by accident
+                # (num_layers=4 on 512x512 -> 32x32, then adaptive_max_pool to
+                # 64x64), costing 4x in the CLSTM for zero gain. Refuse it.
                 raise ValueError(
-                    f"Output dimensions {(H_out, W_out)} do not match target {self.out_hw} "
-                    f"and pool='none' was specified. Either change num_layers or set pool to 'max' or 'avg'."
+                    f"FrontCNN out_hw={self.out_hw} is larger than the conv output "
+                    f"{(H_conv, W_conv)}; this would upsample the feature map. "
+                    f"Pass out_hw=None to keep {(H_conv, W_conv)}, or reduce num_layers."
                 )
-        
+            if (H_conv, W_conv) != (target_h, target_w):
+                if self.pool == 'max':
+                    x = F.adaptive_max_pool2d(x, self.out_hw)
+                elif self.pool == 'avg':
+                    x = F.adaptive_avg_pool2d(x, self.out_hw)
+                else:
+                    # If pool='none' but dimensions don't match, raise an error
+                    raise ValueError(
+                        f"Conv output {(H_conv, W_conv)} does not match target {self.out_hw} "
+                        f"and pool='none' was specified. Either change num_layers or set pool to 'max' or 'avg'."
+                    )
+
         # reshape back to [B, T, C_out, H_out, W_out]
         _, C_out, H_out, W_out = x.shape
         x = x.view(B, T, C_out, H_out, W_out)
