@@ -111,8 +111,11 @@ def test_uint16_roundtrip_is_bit_exact(tmp_path):
 # dataset
 # --------------------------------------------------------------------------
 
-def test_returns_six_tuple_of_uint16(tmp_path):
-    """The queue must stay uint16; float32 here is what OOMed the node."""
+def test_returns_six_tuple_of_int16(tmp_path):
+    """The queue must stay 2 bytes/px; float32 here is what OOMed the node.
+
+    int16, not uint16: torch 2.2 on Sherlock has no uint16 dtype.
+    """
     _write_cache(tmp_path, ["L1"])
     ds = CachedLakeDataset(tmp_path, lake_ids=["L1"], bands=BANDS,
                            labels_dict={"L1": 2}, seq_len=T)
@@ -120,7 +123,7 @@ def test_returns_six_tuple_of_uint16(tmp_path):
     assert len(out) == 6, "callers unpack six; see CachedLakeDataset docstring"
 
     img, area, cloudy, label, lake_id, boa = out
-    assert img.dtype == torch.uint16
+    assert img.dtype == torch.int16
     assert img.shape == (T, len(BANDS), H, W)
     assert area.shape == (T, 1) and cloudy.shape == (T, 1)
     assert boa.shape == (T,)
@@ -184,13 +187,13 @@ def test_missing_lakes_are_dropped_not_fatal(tmp_path):
 
 def test_normalize_inverts_dn_scale():
     dn = 4200.0
-    img = torch.full((1, 1, 3, 2, 2), int(dn * DN_SCALE), dtype=torch.uint16)
+    img = torch.full((1, 1, 3, 2, 2), int(dn * DN_SCALE), dtype=torch.int16)
     out = normalize_batch(img)
     torch.testing.assert_close(out, torch.full_like(out, dn / QUANTIFICATION))
 
 
 def test_normalize_applies_boa_offset():
-    img = torch.full((1, 2, 3, 2, 2), int(2000 * DN_SCALE), dtype=torch.uint16)
+    img = torch.full((1, 2, 3, 2, 2), int(2000 * DN_SCALE), dtype=torch.int16)
     boa = torch.tensor([[0.0, -1000.0]])
     out = normalize_batch(img, boa)
     assert out[0, 0].mean().item() == pytest.approx(0.2)
@@ -198,7 +201,7 @@ def test_normalize_applies_boa_offset():
 
 
 def test_nodata_becomes_zero():
-    img = torch.full((1, 1, 1, 2, 2), NODATA_U16, dtype=torch.uint16)
+    img = torch.full((1, 1, 1, 2, 2), -1, dtype=torch.int16)  # 65535 as int16 bits
     assert torch.all(normalize_batch(img) == 0.0)
 
 
@@ -211,7 +214,7 @@ def test_boa_offset_is_not_applied_to_mask_channel():
     Latent on CW 2018/2019 (baseline 02.12, offset 0 throughout) but silent.
     """
     mask_dn = int(QUANTIFICATION * DN_SCALE)
-    img = torch.zeros((1, 2, 4, 2, 2), dtype=torch.uint16)
+    img = torch.zeros((1, 2, 4, 2, 2), dtype=torch.int16)
     img[:, :, :3] = int(2000 * DN_SCALE)
     img[:, :, 3] = mask_dn                       # trailing channel = all water
     boa = torch.tensor([[0.0, -1000.0]])         # baseline changes at t=1
@@ -244,8 +247,81 @@ def test_mask_channel_lands_on_zero_one_end_to_end(tmp_path):
 
 def test_normalize_defaults_to_all_reflectance():
     """n_refl=None must stay correct for the no-mask case."""
-    img = torch.full((1, 1, 3, 2, 2), int(2000 * DN_SCALE), dtype=torch.uint16)
+    img = torch.full((1, 1, 3, 2, 2), int(2000 * DN_SCALE), dtype=torch.int16)
     boa = torch.tensor([[-1000.0]])
     torch.testing.assert_close(
         normalize_batch(img, boa), normalize_batch(img, boa, n_refl=3)
     )
+
+
+# --------------------------------------------------------------------------
+# the uint16 -> int16 wire format
+# --------------------------------------------------------------------------
+
+def test_high_dn_survives_the_int16_view():
+    """Values >= 32768 wrap negative in the int16 view and must come back.
+
+    This is the whole risk of the bit-view trick. build_cache only rejects DN
+    that collides with the 65535 sentinel, so stored values are legal all the
+    way to 65534 -- well past int16's 32767. Bright ice and cloud tops are
+    exactly where reflectance runs high, so this is not a hypothetical band.
+    """
+    stored = [0, 1, 32767, 32768, 40000, 65534]
+    as_int16 = np.array(stored, dtype=np.uint16).view(np.int16)
+    assert (as_int16 < 0).any(), "test is vacuous unless something wrapped"
+
+    img = torch.from_numpy(as_int16).view(1, 1, 1, 1, len(stored))
+    out = normalize_batch(img, n_refl=1)
+
+    expected = torch.tensor([[v / DN_SCALE / QUANTIFICATION for v in stored]])
+    torch.testing.assert_close(out.flatten(), expected.flatten())
+
+
+def test_nodata_detected_after_unwrapping():
+    """65535 is -1 in the int16 view; the sentinel check must see 65535."""
+    a = np.array([65535, 100], dtype=np.uint16).view(np.int16)
+    img = torch.from_numpy(a).view(1, 1, 1, 1, 2)
+    out = normalize_batch(img, n_refl=1)
+    assert out.flatten()[0].item() == 0.0
+    assert out.flatten()[1].item() == pytest.approx(100 / DN_SCALE / QUANTIFICATION)
+
+
+def test_dataset_wire_format_round_trips_through_normalize(tmp_path):
+    """End to end: what the dataset emits must decode to the DN it cached."""
+    _write_cache(tmp_path, ["L1"])
+    ds = CachedLakeDataset(tmp_path, lake_ids=["L1"], bands=BANDS, seq_len=T)
+    img, _, _, _, _, boa = ds[0]
+    assert img.dtype == torch.int16
+
+    raw = blosc2.open(str(tmp_path / "B04" / "L1.b2nd"))[:]        # uint16
+    out = normalize_batch(img.unsqueeze(0), n_refl=ds.n_refl)
+    torch.testing.assert_close(
+        out[0, :, 0],
+        torch.from_numpy(raw.astype(np.float32) / DN_SCALE / QUANTIFICATION))
+
+
+def test_normalize_does_not_mutate_a_float_input():
+    """`.to(float32)` is a no-op on float32, so in-place work must not alias."""
+    img = torch.full((1, 1, 1, 2, 2), 4000.0)
+    before = img.clone()
+    _ = normalize_batch(img, n_refl=1)
+    torch.testing.assert_close(img, before)
+
+
+def test_wire_dtype_is_installable_on_torch_22():
+    """Guard against re-introducing a uint16 handoff.
+
+    Sherlock runs py-pytorch/2.2.1, where uint16/32/64 tensors do not exist --
+    `torch.from_numpy` on a uint16 array raises TypeError. CI and most laptops
+    run torch >= 2.3, where it works fine, so this regresses silently everywhere
+    except the one machine that matters. Job 39043314 died on exactly this,
+    14 minutes into a cache build.
+    """
+    torch_22_safe = {
+        torch.float64, torch.float32, torch.float16, torch.complex64,
+        torch.complex128, torch.int64, torch.int32, torch.int16, torch.int8,
+        torch.uint8, torch.bool,
+    }
+    a = np.zeros((2, 2), dtype=np.uint16)
+    wire = torch.from_numpy(a.view(np.int16))
+    assert wire.dtype in torch_22_safe

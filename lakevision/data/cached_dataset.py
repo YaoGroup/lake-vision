@@ -42,12 +42,14 @@ def worker_init(worker_id):
 
 
 def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16, n_refl=None):
-    """uint16 raw DN -> float32 surface reflectance, on whatever device it is on.
+    """raw DN -> float32 surface reflectance, on whatever device it is on.
 
     Applies (stored / DN_SCALE + boa_add_offset) / 10000.
 
     Args:
-        img_u16: [B, T, C, H, W] uint16 as produced by CachedLakeDataset.
+        img_u16: [B, T, C, H, W] as produced by CachedLakeDataset — **int16**,
+            carrying uint16 bits (see that class for why). A genuine uint16
+            tensor is also accepted, on torch builds that have the dtype.
         boa_offset: optional [B, T] additive offset per timestep. ESA processing
             baseline >= 04.00 uses -1000, which is exactly why the offset is not
             baked into the cache: applying it before the uint16 cast would wrap
@@ -66,8 +68,21 @@ def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16, n_refl=None):
     if n_refl is None:
         n_refl = C
 
-    missing = img_u16 == nodata
-    x = img_u16.to(torch.float32) / DN_SCALE
+    x = img_u16.to(torch.float32)
+    if x is img_u16:                    # already float32; don't mutate the caller's
+        x = x.clone()
+
+    if img_u16.dtype == torch.int16:
+        # Undo the uint16 -> int16 bit view: anything with the high bit set came
+        # back negative. remainder maps -1 -> 65535 in a single in-place pass
+        # with no temporaries, which is the point -- at bs=32 this tensor is
+        # ~15 GB, so one stray temp would cost more VRAM than the whole model.
+        x.remainder_(65536.0)
+
+    # Computed after the wrap is undone: the sentinel is -1 in the int16 view.
+    missing = x == float(nodata)
+
+    x.div_(DN_SCALE)
     if boa_offset is not None:
         off = boa_offset.to(x.dtype).view(*boa_offset.shape, 1, 1, 1)
         if n_refl < C:
@@ -80,13 +95,17 @@ def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16, n_refl=None):
             # but it activates silently on any reprocessed or later-year stack.
             off = off.repeat(*([1] * boa_offset.ndim), C, 1, 1)
             off[..., n_refl:, :, :] = 0.0
-        x = x + off
-    x = x / QUANTIFICATION
-    return x.masked_fill(missing, 0.0)
+        x.add_(off)
+    x.div_(QUANTIFICATION)
+    return x.masked_fill_(missing, 0.0)
 
 
 class CachedLakeDataset(Dataset):
-    """Reads per-channel blosc2 arrays and returns uint16 image sequences.
+    """Reads per-channel blosc2 arrays and returns 2-byte-per-pixel sequences.
+
+    The image tensor is **int16 carrying uint16 bits**, not float32 and not
+    uint16: torch 2.2 (Sherlock's module) has no uint16 dtype, so the bytes are
+    reinterpreted rather than widened. :func:`normalize_batch` undoes it.
 
     Returns LakeDataset's 5-tuple plus a sixth element, the per-timestep BOA
     offset needed to finish the conversion on the GPU:
@@ -210,7 +229,13 @@ class CachedLakeDataset(Dataset):
             if "eo_cloud_cover" in sc else np.zeros(img.shape[0], dtype=np.float32)
         cloudy = self._fit_time(cloudy)
 
-        img_t = torch.from_numpy(np.ascontiguousarray(img))      # uint16
+        # Sherlock's py-pytorch/2.2.1 has no uint16 tensor dtype — uint8 is the
+        # only unsigned type it supports (uint16/32/64 arrived in torch 2.3).
+        # Reinterpreting the same bytes as int16 is a pure bit-level view: no
+        # copy, no value change on the wire, and the queue stays at 2 bytes per
+        # element, which is the entire reason the cache exists. normalize_batch
+        # undoes the wrap on the GPU with a single in-place remainder.
+        img_t = torch.from_numpy(np.ascontiguousarray(img).view(np.int16))
         area_t = torch.from_numpy(area).unsqueeze(-1)
         cloudy_t = torch.from_numpy(cloudy).unsqueeze(-1)
         boa_t = torch.from_numpy(boa)

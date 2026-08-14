@@ -85,7 +85,7 @@ def bench(cache_root, bands, mask, batch_size, workers, epochs,
             label = label.to(device, non_blocking=True).clamp_min(0)
 
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
-                x = normalize_batch(img, boa)
+                x = normalize_batch(img, boa, n_refl=ds.n_refl)
                 logits = model(x, area, cloudy)
                 loss = crit(logits, label)
             if do_backward:
