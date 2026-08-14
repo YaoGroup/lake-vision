@@ -331,8 +331,15 @@ class LakeDataset(Dataset):
             start = 0
             end = min(self.seq_len, n_timesteps)
 
-        # Extract sequences
-        img_seq = imagery[start:end]  # [seq_len, C, H, W]
+        # Extract sequences. With preload_to_ram the slice is a *view* into the
+        # cached array, and the NaN-fill and normalization below are in-place —
+        # so it must be copied first or epoch 2 onward would train on data that
+        # has already been normalized once, again.
+        # Without the cache the slice is a view we own and may mutate freely.
+        if self._cache is not None:
+            img_seq = imagery[start:end].copy()
+        else:
+            img_seq = imagery[start:end]  # [seq_len, C, H, W]
 
         if water_area is not None:
             area_seq = water_area[start:end]
@@ -344,8 +351,9 @@ class LakeDataset(Dataset):
         else:
             cloudy_seq = np.ones(end - start, dtype=np.float32)
 
-        # Handle NaNs in imagery
-        img_seq = np.nan_to_num(img_seq, nan=0.0)
+        # Handle NaNs in imagery, in place — the copy this used to make was a
+        # full sample (~640 MB at T=153, 512², float32) on every single read.
+        np.nan_to_num(img_seq, nan=0.0, copy=False)
 
         # Get label
         if lake_id in self.labels:
@@ -374,8 +382,13 @@ class LakeDataset(Dataset):
                     img_seq[:, :n_imagery_channels, :, :] / self.imagery_scale, 0.0, 1.0
                 )
 
-        # Convert to tensors
-        img_seq = torch.tensor(img_seq, dtype=torch.float32)
+        # Convert to tensors. from_numpy aliases the buffer instead of copying
+        # it, saving a second full-sample copy per read. ascontiguousarray is a
+        # no-op when the array is already contiguous float32 (the normal case)
+        # and only copies when a cast is genuinely required — which is why this
+        # is not a bare from_numpy: that would silently hand back a float64
+        # tensor for a float64 source, where torch.tensor(dtype=) had cast it.
+        img_seq = torch.from_numpy(np.ascontiguousarray(img_seq, dtype=np.float32))
         area_seq = torch.tensor(area_seq, dtype=torch.float32).unsqueeze(-1)
         cloudy_seq = torch.tensor(cloudy_seq, dtype=torch.float32).unsqueeze(-1)
         label = torch.tensor(label, dtype=torch.long)

@@ -125,6 +125,11 @@ export WANDB_MODE=offline
 export WANDB_DIR="$SHERLOCK_DIR"
 cd "$REPO_DIR"
 
+# Records the commit in this log and refuses to run from a dirty checkout.
+# See engine/sherlock_preflight.sh for the reasoning and the escape hatch.
+source "$REPO_DIR/engine/sherlock_preflight.sh"
+lv_preflight "$REPO_DIR"
+
 # --- 1. build cache ----------------------------------------------------------
 echo ""
 echo "=============================================="

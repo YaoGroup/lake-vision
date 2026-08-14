@@ -1,0 +1,267 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 1e47694..fe1aad7 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -98,9 +98,10 @@ Input tensor shapes: `[B, T, C, H, W]` for imagery, `[B, T, 1]` for scalars.
+ The model supports additional spectral bands beyond RGB:
+ - `use_nir`: Near-infrared band
+ - `use_swir16`: SWIR Band 11 (1.6μm)
+-- `use_swir22`: SWIR Band 12 (2.2μm)
+ 
+-Channel order in NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 'mask']`
++Channel order in current NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'cloudmask_scl', 'mask']`
++
++Note: `cloudmask_scl` is the Sen2Cor SCL-derived per-pixel cloud flag, not currently exposed as a model input. Earlier docs referenced a `swir22` (Band 12) channel — preprocessing was changed to write `cloudmask_scl` in that slot instead, so `swir22` is not available.
+ 
+ ### Attention Types
+ 
+@@ -133,7 +134,7 @@ Channel order in NC files: `['red', 'green', 'blue', 'nir', 'swir16', 'swir22',
+ Future experiments to try:
+ - Increase capacity: `frontcnn_base_channels=16`, `clstm_hidden=64`
+ - Add attention: `--attention_type spatial` or `full`
+-- Multi-spectral: `--use_nir`, `--use_swir16`
++- Multi-spectral: `--use_nir`, `--use_swir16` (no `swir22` — not present in NC files)
+ - Cloudy sequence: `--use_cloudyseq`
+ - Learned area weights: `--learn_area_weights`
+ - Vector mode (no spatial reasoning): `--frontcnn_out_hw 1 1` - uses regular LSTM, ~3x fewer parameters
+@@ -235,7 +236,7 @@ wandb sync wandb/offline-run-*
+ ## Changelog
+ 
+ ### January 2026
+-- Added multi-spectral support (`use_nir`, `use_swir16`, `use_swir22` flags)
++- Added multi-spectral support (`use_nir`, `use_swir16` flags)
+ - Added `cloudy_seq_var` parameter to `LakeDataset` for loading cloud/usefulness sequences
+ - Updated `LakeDataset` to return 5-tuple: `(img_seq, area_seq, cloudy_seq, label, lake_id)`
+ - Created `engine/training/run_training.py` - Main training script with wandb integration
+diff --git a/README.md b/README.md
+index 8127513..f2ac35b 100644
+--- a/README.md
++++ b/README.md
+@@ -20,7 +20,7 @@ The data preprocessing pipeline combines multi-source lake data into standardize
+ ### Data Sources
+ 
+ - **Imagery timestacks**: Sentinel-2 satellite imagery sequences (`lakevision/data/samples/imgseqs/`)
+-  - Format: `.nc` files with reflectance bands (red, green, blue, nir, swir16, swir22, mask)
++  - Format: `.nc` files with channels (red, green, blue, nir, swir16, cloudmask_scl, mask)
+   - Temporal resolution: ~153 observations per lake (May-September 2019)
+   - Spatial resolution: 512×512 pixels at 10m/pixel
+ 
+@@ -58,13 +58,13 @@ Each processed lake is saved as a single `.nc` file with the following structure
+ xr.Dataset {
+     dimensions:
+         time: 153      # number of observations
+-        channel: 7     # RGB + NIR + SWIR16 + SWIR22 + mask
++        channel: 7     # RGB + NIR + SWIR16 + cloudmask_scl + mask
+         y: 512         # image height
+         x: 512         # image width
+ 
+     data_vars:
+         imagery (time, channel, y, x): float32
+-            # 4D image sequences [red, green, blue, nir, swir16, swir22, mask]
++            # 4D image sequences [red, green, blue, nir, swir16, cloudmask_scl, mask]
+ 
+         water_area (time,): float32
+             # 1D water area time series (NaNs filled)
+@@ -80,7 +80,7 @@ xr.Dataset {
+ 
+     coords:
+         time: datetime64[ns]
+-        channel: ['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 'mask']
++        channel: ['red', 'green', 'blue', 'nir', 'swir16', 'cloudmask_scl', 'mask']
+         lake_id: str
+ }
+ ```
+@@ -131,7 +131,7 @@ Input Streams (configurable):
+ Where:
+   B = batch size
+   T = sequence length (number of timesteps)
+-  C = channels (3-7 depending on spectral bands: RGB + optional NIR/SWIR16/SWIR22 + mask)
++  C = channels (3-6 depending on spectral bands: RGB + optional NIR/SWIR16 + mask)
+   H, W = spatial dimensions (512×512)
+ ```
+ 
+@@ -145,7 +145,6 @@ Where:
+ | `use_cloudyseq` | True/False | False | Use cloudy tile usefulness sequence |
+ | `use_nir` | True/False | False | Include NIR band in imagery |
+ | `use_swir16` | True/False | False | Include SWIR16 band in imagery |
+-| `use_swir22` | True/False | False | Include SWIR22 band in imagery |
+ 
+ #### Band Statistics (Normalization)
+ 
+diff --git a/lakevision/data/datasets.py b/lakevision/data/datasets.py
+index f485e03..706f143 100644
+--- a/lakevision/data/datasets.py
++++ b/lakevision/data/datasets.py
+@@ -33,7 +33,7 @@ class LakeDataset(Dataset):
+ 
+     1. **Preprocessed** (from combine_lake_data):
+        - ``imagery``: [time, channel, y, x] with channels
+-         [red, green, blue, nir, swir16, swir22, mask]
++         [red, green, blue, nir, swir16, cloudmask_scl, mask]
+        - ``water_area``: [time]
+        - Optional ``cloudy_seq_*`` variables
+ 
+@@ -61,7 +61,6 @@ class LakeDataset(Dataset):
+         transform: Optional transform to apply to imagery tensors (applied after normalization).
+         use_nir: whether to include NIR band (default: False)
+         use_swir16: whether to include SWIR16 band (default: False)
+-        use_swir22: whether to include SWIR22 band (default: False)
+         use_mask: whether to include the mask band as the last channel (default: True).
+             Set to False when mask is not available (e.g. raw sat-tile-stack files).
+         band_stats: Path to JSON file with band statistics, or dict with stats.
+@@ -81,12 +80,12 @@ class LakeDataset(Dataset):
+     """
+ 
+     # Channel order in preprocessed NC files
+-    CHANNEL_ORDER = ['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 'mask']
++    CHANNEL_ORDER = ['red', 'green', 'blue', 'nir', 'swir16', 'cloudmask_scl', 'mask']
+ 
+     # Mapping from sat-tile-stack band names to canonical channel names
+     BAND_TO_CHANNEL = {
+         'B04': 'red', 'B03': 'green', 'B02': 'blue',
+-        'B08': 'nir', 'B11': 'swir16', 'B12': 'swir22',
++        'B08': 'nir', 'B11': 'swir16',
+     }
+ 
+     def __init__(
+@@ -104,7 +103,6 @@ class LakeDataset(Dataset):
+         # Spectral band flags
+         use_nir: bool = False,
+         use_swir16: bool = False,
+-        use_swir22: bool = False,
+         use_mask: bool = True,
+         # Band statistics for normalization
+         band_stats: Optional[Union[str, Path, Dict]] = None,
+@@ -123,7 +121,6 @@ class LakeDataset(Dataset):
+         self.transform = transform
+         self.use_nir = use_nir
+         self.use_swir16 = use_swir16
+-        self.use_swir22 = use_swir22
+         self.use_mask = use_mask
+         self.cloudy_seq_var = cloudy_seq_var
+ 
+@@ -142,13 +139,10 @@ class LakeDataset(Dataset):
+             self.channels_to_load.append('nir')
+         if use_swir16:
+             self.channels_to_load.append('swir16')
+-        if use_swir22:
+-            self.channels_to_load.append('swir22')
+         if use_mask:
+             self.channels_to_load.append('mask')
+ 
+         self.n_channels = len(self.channels_to_load)
+-        print(f"Loading {self.n_channels} channels: {self.channels_to_load}")
+ 
+         # collect all .nc file paths
+         self.file_paths = self._collect_paths(data_paths)
+@@ -331,8 +325,14 @@ class LakeDataset(Dataset):
+             start = 0
+             end = min(self.seq_len, n_timesteps)
+ 
+-        # Extract sequences
+-        img_seq = imagery[start:end]  # [seq_len, C, H, W]
++        # Extract sequences. When from preload cache, copy the slice so that
++        # in-place NaN-fill and normalization below do NOT mutate the cache
++        # (subsequent epochs would see zero-filled, normalized data otherwise).
++        # Without cache, the slice is a view we own and mutate freely.
++        if self._cache is not None:
++            img_seq = imagery[start:end].copy()
++        else:
++            img_seq = imagery[start:end]  # [seq_len, C, H, W]
+ 
+         if water_area is not None:
+             area_seq = water_area[start:end]
+@@ -344,8 +344,8 @@ class LakeDataset(Dataset):
+         else:
+             cloudy_seq = np.ones(end - start, dtype=np.float32)
+ 
+-        # Handle NaNs in imagery
+-        img_seq = np.nan_to_num(img_seq, nan=0.0)
++        # Handle NaNs in imagery (in-place — saves one ~640MB copy per sample).
++        np.nan_to_num(img_seq, nan=0.0, copy=False)
+ 
+         # Get label
+         if lake_id in self.labels:
+@@ -374,10 +374,13 @@ class LakeDataset(Dataset):
+                     img_seq[:, :n_imagery_channels, :, :] / self.imagery_scale, 0.0, 1.0
+                 )
+ 
+-        # Convert to tensors
+-        img_seq = torch.tensor(img_seq, dtype=torch.float32)
+-        area_seq = torch.tensor(area_seq, dtype=torch.float32).unsqueeze(-1)
+-        cloudy_seq = torch.tensor(cloudy_seq, dtype=torch.float32).unsqueeze(-1)
++        # Convert to tensors. torch.from_numpy aliases the numpy buffer (no
++        # copy) — saves another ~640MB per sample vs torch.tensor(...). Safe
++        # here because img_seq is float32 owned by this worker; we won't
++        # touch the underlying ndarray after this point.
++        img_seq = torch.from_numpy(img_seq)
++        area_seq = torch.from_numpy(np.ascontiguousarray(area_seq, dtype=np.float32)).unsqueeze(-1)
++        cloudy_seq = torch.from_numpy(np.ascontiguousarray(cloudy_seq, dtype=np.float32)).unsqueeze(-1)
+         label = torch.tensor(label, dtype=torch.long)
+ 
+         # Min-max normalize water area per sample
+diff --git a/lakevision/models/classifier.py b/lakevision/models/classifier.py
+index 988604e..77ace8d 100644
+--- a/lakevision/models/classifier.py
++++ b/lakevision/models/classifier.py
+@@ -14,7 +14,7 @@ from .attention import SpatialCBAM, FullCBAM
+ 
+ 
+ # Channel name to index mapping for NC files
+-CHANNEL_NAMES = ['red', 'green', 'blue', 'nir', 'swir16', 'swir22', 'mask']
++CHANNEL_NAMES = ['red', 'green', 'blue', 'nir', 'swir16', 'cloudmask_scl', 'mask']
+ 
+ class LakeDrainageClassifier(nn.Module):
+     """
+@@ -42,7 +42,6 @@ class LakeDrainageClassifier(nn.Module):
+         seq_len                 (int): sequence length, required when learn_*_weights=True (default: 153)
+         use_nir                 (bool): whether to include NIR band in imagery (default: False)
+         use_swir16              (bool): whether to include SWIR16 band in imagery (default: False)
+-        use_swir22              (bool): whether to include SWIR22 band in imagery (default: False)
+         attention_type          (str): type of attention mechanism. Options:
+             - 'none': no attention
+             - 'spatial': spatial CBAM
+@@ -79,8 +78,7 @@ class LakeDrainageClassifier(nn.Module):
+                Base: 3 RGB + 1 mask = 4 channels
+                With use_nir=True: +1 channel
+                With use_swir16=True: +1 channel
+-               With use_swir22=True: +1 channel
+-               Max: 7 channels (RGB + NIR + SWIR16 + SWIR22 + mask)
++               Max: 6 channels (RGB + NIR + SWIR16 + mask)
+             H: height
+             W: width
+         area_seq: [B, T, 1] tensor of water area time series (optional)
+@@ -114,7 +112,6 @@ class LakeDrainageClassifier(nn.Module):
+         # spectral band flags (beyond RGB)
+         use_nir=False,
+         use_swir16=False,
+-        use_swir22=False,
+         # attention configuration
+         attention_type='none',
+         # classification and imagery configuration (these may not change)
+@@ -156,7 +153,6 @@ class LakeDrainageClassifier(nn.Module):
+         self.seq_len = seq_len
+         self.use_nir = use_nir
+         self.use_swir16 = use_swir16
+-        self.use_swir22 = use_swir22
+         self.attention_type = attention_type.lower()
+         self.pool_type = pool_type
+         self.gradient_checkpointing = gradient_checkpointing
+@@ -168,8 +164,6 @@ class LakeDrainageClassifier(nn.Module):
+             self.n_imagery_channels += 1
+         if use_swir16:
+             self.n_imagery_channels += 1
+-        if use_swir22:
+-            self.n_imagery_channels += 1
+ 
+         # validate attention type
+         valid_attention = ['none', 'spatial', 'full', 'arch']
+@@ -443,8 +437,6 @@ class LakeDrainageClassifier(nn.Module):
+             spectral_bands.append('NIR')
+         if self.use_swir16:
+             spectral_bands.append('SWIR16')
+-        if self.use_swir22:
+-            spectral_bands.append('SWIR22')
+         spectral_str = '+'.join(spectral_bands)
+ 
+         # Build area config string

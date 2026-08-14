@@ -1,0 +1,269 @@
+diff --git a/datasets/.DS_Store b/datasets/.DS_Store
+deleted file mode 100644
+index 67bb2e2..0000000
+Binary files a/datasets/.DS_Store and /dev/null differ
+diff --git a/engine/preprocessing/append_labels.sh b/engine/preprocessing/append_labels.sh
+index 53d25e1..0916360 100644
+--- a/engine/preprocessing/append_labels.sh
++++ b/engine/preprocessing/append_labels.sh
+@@ -1,13 +1,14 @@
+ #!/bin/bash
+ #SBATCH --job-name=append_labels
+-#SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
+-#SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
+-#SBATCH --time=01:00:00
++#SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%A_%a.out
++#SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%A_%a.err
++#SBATCH --time=02:00:00
+ #SBATCH -p serc
+ #SBATCH --nodes=1
+ #SBATCH --ntasks=1
+ #SBATCH --cpus-per-task=2
+ #SBATCH --mem=16GB
++#SBATCH --array=0-9
+ #SBATCH --mail-type=ALL
+ #SBATCH --mail-user=jrines@stanford.edu
+ 
+@@ -26,19 +27,24 @@ REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
+ INPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_with_cloudyseq"
+ OUTPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_labeled"
+ LABELS_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/labels_2019_volumes_CW.csv"
++NUM_CHUNKS=10
+ 
+ export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
+ 
++echo "Array task $SLURM_ARRAY_TASK_ID of $NUM_CHUNKS"
+ echo "Reading .nc files from: $INPUT_DIR"
+ echo "Appending labels from:  $LABELS_FILE"
+ echo "Writing labeled files to: $OUTPUT_DIR"
+ echo ""
+ 
+-# Run in labels-only mode
++# Run in labels-only mode with zlib compression
+ python3 $REPO_DIR/engine/preprocessing/preprocess_tstacks.py \
+     --labels_only \
++    --compress \
+     --input_dir $INPUT_DIR \
+     --output_dir $OUTPUT_DIR \
+-    --labels_file $LABELS_FILE
++    --labels_file $LABELS_FILE \
++    --chunk_idx $SLURM_ARRAY_TASK_ID \
++    --num_chunks $NUM_CHUNKS
+ 
+-echo "Done!"
+\ No newline at end of file
++echo "Done! (chunk $SLURM_ARRAY_TASK_ID)"
+diff --git a/engine/preprocessing/preprocess_tstacks.py b/engine/preprocessing/preprocess_tstacks.py
+index 946f0b5..85038b0 100644
+--- a/engine/preprocessing/preprocess_tstacks.py
++++ b/engine/preprocessing/preprocess_tstacks.py
+@@ -24,14 +24,13 @@ import time
+ from datetime import datetime, timedelta
+ from pathlib import Path
+ 
++import numpy as np
+ import pandas as pd
+ import xarray as xr
+ 
+ # Add parent directory to path for imports
+ sys.path.insert(0, str(Path(__file__).parent.parent))
+ 
+-from lakevision.data.preprocessing import load_area_sequences, combine_lake_data
+-
+ 
+ def load_label_lookup(labels_path, label_columns):
+     """Load CSV and build a lookup dict keyed by new_id."""
+@@ -49,15 +48,19 @@ def load_label_lookup(labels_path, label_columns):
+     return lookup
+ 
+ 
+-def append_labels_and_save(input_path, output_path, label_row):
+-    """Open a .nc file, append label attributes, and save to a new path."""
++def append_labels_and_save(input_path, output_path, label_row=None, compress=False):
++    """Open a .nc file, optionally append label attributes and compress, and save."""
+     ds = xr.open_dataset(input_path)
+-    for col, val in label_row.items():
+-        # Convert numpy types to native Python for clean NetCDF storage
+-        if hasattr(val, "item"):
+-            val = val.item()
+-        ds.attrs[col] = val
+-    ds.to_netcdf(output_path)
++    if label_row:
++        for col, val in label_row.items():
++            # Convert numpy types to native Python for clean NetCDF storage
++            if hasattr(val, "item"):
++                val = val.item()
++            ds.attrs[col] = val
++    encoding = None
++    if compress:
++        encoding = {var: {'zlib': True, 'complevel': 4} for var in ds.data_vars}
++    ds.to_netcdf(output_path, encoding=encoding)
+     ds.close()
+ 
+ 
+@@ -93,13 +96,13 @@ def main():
+         "--labels_file",
+         type=str,
+         default=None,
+-        help="Path to labels CSV with columns: new_id, label_rines, rinesID, p_nd, p_ed, p_ld, p_rd",
++        help="Path to labels CSV with columns: new_id, label_rines, rinesID, p_nd, p_ed, p_ld, p_cd",
+     )
+     parser.add_argument(
+         "--label_columns",
+         type=str,
+         nargs="+",
+-        default=["label_rines", "rinesID", "p_nd", "p_ed", "p_ld", "p_rd"],
++        default=["label_rines", "rinesID", "p_nd", "p_ed", "p_ld", "p_cd"],
+         help="Columns from labels CSV to append as attributes",
+     )
+     parser.add_argument(
+@@ -131,6 +134,23 @@ def main():
+         action="store_true",
+         help="Skip preprocessing; read .nc files from --input_dir, append labels, save to --output_dir",
+     )
++    parser.add_argument(
++        "--compress",
++        action="store_true",
++        help="Apply zlib compression to reduce file size (~8x)",
++    )
++    parser.add_argument(
++        "--chunk_idx",
++        type=int,
++        default=None,
++        help="Which chunk to process (0-indexed, for SLURM array jobs)",
++    )
++    parser.add_argument(
++        "--num_chunks",
++        type=int,
++        default=None,
++        help="Total number of chunks (for SLURM array jobs)",
++    )
+ 
+     args = parser.parse_args()
+ 
+@@ -154,17 +174,31 @@ def main():
+ 
+         input_dir = Path(args.input_dir)
+         nc_files = sorted(input_dir.glob("*.nc"))
++        total_files = len(nc_files)
++
++        # Select chunk if running as array job
++        if args.chunk_idx is not None and args.num_chunks is not None:
++            chunk_size = (total_files + args.num_chunks - 1) // args.num_chunks
++            start = args.chunk_idx * chunk_size
++            end = min(start + chunk_size, total_files)
++            nc_files = nc_files[start:end]
++
+         print(f"Labels-only mode:")
+         print(f"  Reading from: {input_dir}")
+         print(f"  Writing to:   {output_dir}")
+-        print(f"  Found {len(nc_files)} .nc files\n")
++        print(f"  Compress:     {args.compress}")
++        if args.chunk_idx is not None:
++            print(f"  Chunk:        {args.chunk_idx}/{args.num_chunks} (files {start}-{end-1} of {total_files})")
++        print(f"  Processing {len(nc_files)} .nc files\n")
+ 
+         matched, skipped = 0, 0
+         for nc_path in nc_files:
+             lake_id = nc_path.stem  # e.g., CW2019_1524
+             if lake_id in label_lookup:
+                 out_path = output_dir / nc_path.name
+-                append_labels_and_save(str(nc_path), str(out_path), label_lookup[lake_id])
++                append_labels_and_save(str(nc_path), str(out_path),
++                                       label_row=label_lookup[lake_id],
++                                       compress=args.compress)
+                 matched += 1
+             else:
+                 print(f"  SKIP {nc_path.name}: '{lake_id}' not found in CSV")
+@@ -175,6 +209,8 @@ def main():
+         return
+ 
+     # --- Full preprocessing mode ---
++    from lakevision.data.preprocessing import load_area_sequences, combine_lake_data
++
+     if args.tstack_dir is None or args.area_file is None:
+         print("ERROR: full preprocessing requires --tstack_dir and --area_file")
+         sys.exit(1)
+@@ -230,7 +266,9 @@ def main():
+ 
+             # Append labels if available
+             if label_lookup and lake_id in label_lookup:
+-                append_labels_and_save(str(output_path), str(output_path), label_lookup[lake_id])
++                append_labels_and_save(str(output_path), str(output_path),
++                                       label_row=label_lookup[lake_id],
++                                       compress=args.compress)
+                 label_matched += 1
+             elif label_lookup:
+                 label_skipped += 1
+diff --git a/engine/preprocessing/preprocess_tstacks.sh b/engine/preprocessing/preprocess_tstacks.sh
+index e69de29..3482afd 100644
+--- a/engine/preprocessing/preprocess_tstacks.sh
++++ b/engine/preprocessing/preprocess_tstacks.sh
+@@ -0,0 +1,66 @@
++#!/bin/bash
++#SBATCH --job-name=proc_tstacks
++#SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.out
++#SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision/logs/%x_%j.err
++#SBATCH --time=08:00:00
++#SBATCH -p serc
++#SBATCH --nodes=1
++#SBATCH --ntasks=1
++#SBATCH --cpus-per-task=4
++#SBATCH --mem=64GB
++#SBATCH --mail-type=ALL
++#SBATCH --mail-user=jrines@stanford.edu
++
++# module loading:
++ml system
++ml python/3.12.1
++ml py-numpy/1.26.3_py312
++ml py-pandas/2.2.1_py312
++ml py-scipy/1.12.0_py312
++ml py-pytorch/2.2.1_py312
++
++# install xarray if not available (into user space)
++pip install --user xarray netcdf4
++
++# Set paths and add repo to PYTHONPATH
++REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
++TSTACK_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks"
++AREA_FILE="/oak/stanford/groups/cyaolai/JoshRines/data/all_lakes_2019.nc"
++OUTPUT_DIR="/oak/stanford/groups/cyaolai/JoshRines/data/tstacks/CW2019_tstacks_processed"
++MAX_LAKES=  # Set to empty string for all lakes, or a number to limit
++
++# Spectral bands configuration
++# By default, includes NIR + SWIR1 + SWIR2 bands (7 channels total: RGB + NIR + SWIR1 + SWIR2 + mask)
++# Set to "true" to only include RGB + mask (4 channels, legacy mode)
++NO_SPECTRAL=""
++# Customize which spectral bands to include
++# Note: Sentinel-2 uses 'swir16' (band 11) and 'swir22' (band 12) naming
++SPECTRAL_BANDS="nir swir16 swir22"
++
++# Add repo to PYTHONPATH so lakevision package is importable
++export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
++
++# Create output directory
++mkdir -p $OUTPUT_DIR
++
++# Build command arguments
++CMD_ARGS="--tstack_dir $TSTACK_DIR --area_file $AREA_FILE --output_dir $OUTPUT_DIR"
++
++if [ -n "$MAX_LAKES" ]; then
++    CMD_ARGS="$CMD_ARGS --max_lakes $MAX_LAKES"
++fi
++
++if [ "$NO_SPECTRAL" = "true" ]; then
++    CMD_ARGS="$CMD_ARGS --no_spectral"
++else
++    CMD_ARGS="$CMD_ARGS --spectral_bands $SPECTRAL_BANDS"
++fi
++
++echo "Running preprocessing with spectral bands: $SPECTRAL_BANDS"
++echo "Output will have channels: red, green, blue, $SPECTRAL_BANDS, mask"
++echo ""
++
++# Run preprocessing
++python3 $REPO_DIR/engine/preprocessing/preprocess_tstacks.py $CMD_ARGS
++
++echo "Done!"
+\ No newline at end of file

@@ -211,3 +211,52 @@ class TestLakeDatasetRealData:
         
         assert img_seq.shape == (1, 21, 4, 512, 512)
         assert area_seq.shape == (1, 21, 1)
+
+
+class TestPreloadCacheIsNotMutated:
+    """`__getitem__` normalizes in place; with preload_to_ram that slice is a
+    view into the RAM cache. Without a defensive copy the cache is normalized
+    once per read, so epoch 2 would train on doubly-normalized data and epoch 3
+    on triply — silently, with no error and a slowly collapsing input scale.
+
+    This guards the copy elision in __getitem__ (in-place nan_to_num +
+    torch.from_numpy), which removes two full-sample copies per read and is
+    only safe because of that .copy().
+    """
+
+    def test_repeated_reads_are_identical(self, sample_nc_file):
+        ds = LakeDataset(sample_nc_file, seq_len=21, preload_to_ram=True,
+                         normalize_imagery=True)
+        first = ds[0][0].clone()
+        for _ in range(3):
+            again = ds[0][0]
+            torch.testing.assert_close(
+                first, again,
+                msg="preload cache was mutated: repeated reads diverge")
+
+    def test_cached_array_still_holds_raw_values(self, sample_nc_file):
+        """Assert on the cache itself, not just on what reads return.
+
+        normalize_imagery must be on: with it off, nothing in __getitem__
+        mutates synthetic NaN-free data, so the test would pass even unguarded.
+        """
+        ds = LakeDataset(sample_nc_file, seq_len=21, preload_to_ram=True,
+                         normalize_imagery=True)
+        before = ds._cache[0]['imagery'].copy()
+        _ = ds[0]
+        np.testing.assert_array_equal(
+            ds._cache[0]['imagery'], before,
+            err_msg="__getitem__ wrote through to the preload cache")
+
+    def test_matches_the_uncached_path(self, sample_nc_file):
+        """Preloading is an optimization; it must not change the values."""
+        cached = LakeDataset(sample_nc_file, seq_len=21, preload_to_ram=True,
+                             normalize_imagery=True)[0][0]
+        direct = LakeDataset(sample_nc_file, seq_len=21, preload_to_ram=False,
+                             normalize_imagery=True)[0][0]
+        torch.testing.assert_close(cached, direct)
+
+    def test_dtype_is_float32(self, sample_nc_file):
+        """from_numpy aliases the buffer, so the cast must be explicit."""
+        img = LakeDataset(sample_nc_file, seq_len=21)[0][0]
+        assert img.dtype == torch.float32
