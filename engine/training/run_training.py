@@ -14,6 +14,7 @@ import random
 import sys
 import time
 from collections import Counter
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -790,7 +791,6 @@ def train(config: dict):
         from lakevision.data.cached_dataset import (
             CachedLakeDataset, normalize_batch, worker_init as _worker_init,
         )
-        normalize_fn = normalize_batch
 
         cache_kwargs = dict(
             bands=config.get("cache_bands") or ["B04", "B03", "B02"],
@@ -812,6 +812,11 @@ def train(config: dict):
         test_dataset = CachedLakeDataset(cache_root, lake_ids=test_ids, **cache_kwargs)
         channels_to_load = list(cache_kwargs["bands"]) + (
             [cache_kwargs["mask"]] if cache_kwargs["mask"] else [])
+
+        # Bind n_refl so the BOA offset is applied to the reflectance channels
+        # only, never to an appended 0/1 mask channel.
+        _n_refl = train_dataset.n_refl
+        normalize_fn = partial(normalize_batch, n_refl=_n_refl)
     else:
         _worker_init = None
         preload_to_ram = config.get("preload_to_ram", False)

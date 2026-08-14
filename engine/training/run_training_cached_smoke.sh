@@ -21,6 +21,13 @@
 # harness that merely resembled training. This runs run_training.py itself with
 # --use_cache, so what gets measured is what will actually train.
 #
+# MEASURED so far (job 38671174, sh03-18n11, died in pip before step 1):
+#   L_SCRATCH  3.0 TB      node RAM 503 GB      A100-SXM4-80GB      16 cores
+#   3.0 TB is 3x the 1 TB we assumed, and it removes capacity as a constraint:
+#   uncompressed uint16 is 240.6 MB/lake for RGB (153 x 512 x 512 x 2 x 3) plus
+#   40.1 MB for a per-timestep mask, so even 6 bands + mask at N=5000 is 2.6 TB.
+#   Compression now buys page-cache residency, not disk headroom.
+#
 # STEPS
 #   0. print L_SCRATCH capacity + node specs (the number that gates the
 #      full-scale plan; $L_SCRATCH only exists inside an allocation)
@@ -77,8 +84,41 @@ ml system python/3.12.1 py-numpy/1.26.3_py312 py-pandas/2.2.1_py312 \
    py-scipy/1.12.0_py312 py-pytorch/2.2.1_py312 py-torchvision/0.17.1_py312 \
    py-scikit-learn/1.5.1_py312
 
-pip install --user --quiet blosc2 netcdf4 xarray
-python3 -c "import blosc2, torch; print(f'blosc2 {blosc2.__version__} | torch {torch.__version__}')"
+# Version pins are load-bearing, not tidiness. Sherlock's compute nodes are
+# glibc 2.17 (binutils 2.27), so only manylinux2014 / manylinux_2_17 wheels
+# install. Newer releases have moved past that:
+#   blosc2  >=4.8 ships manylinux_2_28 only; 4.11 has no cp312 wheel at all
+#   netCDF4 >=1.7.3 ships no cp312 x86_64 linux wheel
+# Without an upper bound pip falls back to the sdist, which pulls numpy>=2.1 as
+# a build dep, which is also sdist-only here, which needs GCC >= 10.3 -- but
+# `ml py-pytorch` reloads gcc 12.4.0 => 10.1.0. That is what killed job
+# 38671174 before it ran a single line of our code.
+# blosc2 4.7.0 is the newest manylinux_2_17 build; it needs numpy>=1.26, which
+# py-numpy/1.26.3_py312 satisfies, so numpy is NOT upgraded out from under
+# torch 2.2.1 (which cannot run on numpy 2.x).
+# --only-binary=:all: makes a missing wheel fail loudly in seconds instead of
+# silently starting a doomed source build.
+pip install --user --quiet --only-binary=:all: \
+    "blosc2>=3.3,<4.8" "netCDF4<1.7.3" xarray
+
+# Preflight: exercise the exact blosc2 API build_cache.py uses. A version that
+# imports but lacks CParams (any blosc2 2.x) would otherwise fail 40 minutes
+# into the cache build.
+python3 - <<'PREFLIGHT'
+import tempfile, os
+import numpy as np, blosc2, netCDF4, torch
+print(f"blosc2 {blosc2.__version__} | netCDF4 {netCDF4.__version__} | "
+      f"numpy {np.__version__} | torch {torch.__version__}")
+a = (np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8) % 65535)
+p = os.path.join(tempfile.mkdtemp(), "preflight.b2nd")
+blosc2.asarray(a, urlpath=p, mode="w", chunks=(2, 8, 8),
+               cparams=blosc2.CParams(codec=blosc2.Codec.LZ4,
+                                      filters=[blosc2.Filter.BITSHUFFLE],
+                                      clevel=5))
+assert (blosc2.open(p)[:] == a).all(), "blosc2 roundtrip mismatch"
+blosc2.set_nthreads(1)
+print("preflight OK: blosc2 write/read/set_nthreads round-trips")
+PREFLIGHT
 
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 export WANDB_MODE=offline

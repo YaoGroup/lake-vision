@@ -41,7 +41,7 @@ def worker_init(worker_id):
         blosc2.set_nthreads(1)
 
 
-def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16):
+def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16, n_refl=None):
     """uint16 raw DN -> float32 surface reflectance, on whatever device it is on.
 
     Applies (stored / DN_SCALE + boa_add_offset) / 10000.
@@ -53,14 +53,34 @@ def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16):
             baked into the cache: applying it before the uint16 cast would wrap
             dark pixels around to ~65k.
         nodata: sentinel value written by the cache builder.
+        n_refl: how many leading channels carry radiometry. Any trailing channels
+            are treated as 0/1 indicator masks: still rescaled to [0, 1], but the
+            BOA offset is NOT added to them. Defaults to all channels, which is
+            correct whenever no mask channel was appended. Pass
+            ``CachedLakeDataset.n_refl``.
 
     Returns:
         [B, T, C, H, W] float32, no-data filled with 0.
     """
+    C = img_u16.shape[-3]
+    if n_refl is None:
+        n_refl = C
+
     missing = img_u16 == nodata
     x = img_u16.to(torch.float32) / DN_SCALE
     if boa_offset is not None:
-        x = x + boa_offset.to(x.dtype).view(*boa_offset.shape, 1, 1, 1)
+        off = boa_offset.to(x.dtype).view(*boa_offset.shape, 1, 1, 1)
+        if n_refl < C:
+            # A mask channel is an indicator, not a measurement. Adding the BOA
+            # offset to it would land it at (1e4 + offset)/1e4 instead of 1, and
+            # -- worse -- would make a *static* lake boundary vary over time
+            # whenever the processing baseline changes mid-series, inventing a
+            # temporal signal the ConvLSTM could latch onto. Harmless on CW
+            # 2018/2019, where every timestep is baseline 02.12 with offset 0,
+            # but it activates silently on any reprocessed or later-year stack.
+            off = off.repeat(*([1] * boa_offset.ndim), C, 1, 1)
+            off[..., n_refl:, :, :] = 0.0
+        x = x + off
     x = x / QUANTIFICATION
     return x.masked_fill(missing, 0.0)
 
@@ -133,7 +153,11 @@ class CachedLakeDataset(Dataset):
         if not self.lake_ids:
             raise ValueError(f"No cached lakes found under {self.root}")
 
-        self.n_channels = len(self.bands) + (1 if mask else 0)
+        # n_refl is the count of radiometric channels; the mask, if present, is
+        # the trailing channel. normalize_batch needs this to avoid applying the
+        # BOA offset to an indicator channel.
+        self.n_refl = len(self.bands)
+        self.n_channels = self.n_refl + (1 if mask else 0)
 
     def __len__(self):
         return len(self.lake_ids)
