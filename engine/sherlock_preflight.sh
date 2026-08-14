@@ -10,9 +10,15 @@
 #      not a place to edit code — local + GitHub are the source of truth. Edits
 #      made here are invisible to everyone, are not backed up, and silently
 #      decouple published numbers from the repo that supposedly produced them.
-#      We already lost time to this: two stashes sat on the Sherlock clone for
-#      months, one of them holding the only copy of the SLURM-array preprocessing
-#      code that actually ran in March 2026.
+#
+# Failure philosophy, learned from job 39051098 (which this file killed):
+#   - a DIRTY TREE is fatal — that is the guardrail.
+#   - INABILITY to check (git too old, git missing, weird FS) is a WARNING.
+#     The job's purpose is science; the stamp must never be the reason a
+#     3-hour allocation dies 30 seconds in.
+#
+# Portability: Sherlock compute nodes carry an ancient git. `git -C` needs
+# 1.8.5+, so we cd in a subshell instead. Assume nothing newer than ~1.8.
 #
 # Untracked files are tolerated — stray outputs and editor droppings do not
 # change what the job executes. Only modifications to *tracked* files are fatal.
@@ -25,22 +31,36 @@
 
 lv_preflight() {
     local repo_dir="${1:-$PWD}"
-
-    if ! git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
-        echo "PREFLIGHT: $repo_dir is not a git repo; cannot record provenance." >&2
-        return 1
-    fi
-
-    local sha branch dirty
-    sha=$(git -C "$repo_dir" rev-parse HEAD)
-    branch=$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD)
-    dirty=$(git -C "$repo_dir" status --porcelain --untracked-files=no)
+    local sha branch subject dirty
 
     echo "--- provenance ---"
     echo "repo    : $repo_dir"
-    echo "branch  : $branch"
+
+    if ! command -v git >/dev/null 2>&1; then
+        echo "tree    : UNKNOWN — no git on this node; provenance not recorded" >&2
+        echo "------------------"
+        return 0
+    fi
+
+    # Old-git-safe: run everything from inside the repo, no `git -C`.
+    if ! sha=$(cd "$repo_dir" && git rev-parse HEAD 2>/dev/null); then
+        echo "tree    : UNKNOWN — git could not read $repo_dir; provenance not recorded" >&2
+        echo "------------------"
+        return 0
+    fi
+
+    branch=$(cd "$repo_dir" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    subject=$(cd "$repo_dir" && git log -1 --pretty=%s 2>/dev/null)
+    echo "branch  : ${branch:-unknown}"
     echo "commit  : $sha"
-    echo "subject : $(git -C "$repo_dir" log -1 --pretty=%s)"
+    echo "subject : ${subject:-unknown}"
+
+    # If status itself fails, warn and continue — do not kill the job.
+    if ! dirty=$(cd "$repo_dir" && git status --porcelain --untracked-files=no 2>/dev/null); then
+        echo "tree    : UNKNOWN — git status failed; dirty-check skipped" >&2
+        echo "------------------"
+        return 0
+    fi
 
     if [ -n "$dirty" ]; then
         echo "tree    : DIRTY"
@@ -53,13 +73,13 @@ PREFLIGHT FAILED: tracked files are modified in the Sherlock checkout.
 This clone is for running code, not editing it. Commit and push from your
 local machine, then here:
 
-    git -C "$repo_dir" fetch origin
-    git -C "$repo_dir" checkout <branch>
-    git -C "$repo_dir" reset --hard origin/<branch>
+    cd "$repo_dir"
+    git fetch origin
+    git reset --hard origin/<branch>
 
-To discard what is here (check it first -- 'git -C "$repo_dir" diff'):
+To discard what is here (check it first with 'git diff'):
 
-    git -C "$repo_dir" checkout -- .
+    git checkout -- .
 
 To run anyway, knowing the results will not match any commit:
 
