@@ -49,6 +49,19 @@ class LakeDrainageClassifier(nn.Module):
             - 'full': full CBAM (channel + spatial)
             - 'arch': architectural attention, dual pathway with lake mask
             default: 'none'
+        mask_as_channel         (bool): feed the trailing mask channel into FrontCNN as a
+                                        real input channel (in_channels = n_imagery + 1)
+                                        instead of splitting it off. Without this, the mask
+                                        is consumed ONLY by attention_type='arch' and is
+                                        discarded under every other attention type — which
+                                        is the ESSD baseline behavior. Incompatible with
+                                        'arch', which has its own mask pathway. (default: False)
+        expect_mask_channel     (bool or None): whether the input x carries a trailing mask
+                                        channel. When set, forward() asserts the channel
+                                        count exactly (n_imagery + 1 if True, n_imagery if
+                                        False) so a mis-specified band list crashes at the
+                                        first batch instead of silently discarding channels.
+                                        None (default) skips the check — legacy behavior.
         num_classes             (int): number of output classes (default: 4)
         input_H                 (int): input image height (default: 512)
         input_W                 (int): input image width (default: 512)
@@ -125,6 +138,9 @@ class LakeDrainageClassifier(nn.Module):
         use_swir22=False,
         # attention configuration
         attention_type='none',
+        # mask channel wiring (see docstring; default False reproduces ESSD)
+        mask_as_channel=False,
+        expect_mask_channel=None,
         # classification and imagery configuration (these may not change)
         num_classes=4,
         input_H=512,
@@ -184,6 +200,24 @@ class LakeDrainageClassifier(nn.Module):
         if self.attention_type not in valid_attention:
             raise ValueError(f"Invalid attention_type '{attention_type}'. Must be one of {valid_attention}.")
 
+        # Mask wiring. Without mask_as_channel, the trailing mask channel is
+        # consumed only by the 'arch' pathway and silently discarded otherwise.
+        if mask_as_channel and self.attention_type == 'arch':
+            raise ValueError(
+                "mask_as_channel=True is incompatible with attention_type='arch': "
+                "'arch' already consumes the mask through its own FrontCNN pathway. "
+                "Pick one mask route.")
+        if mask_as_channel and expect_mask_channel is False:
+            raise ValueError("mask_as_channel=True requires a mask channel in the input, "
+                             "but expect_mask_channel is False.")
+        if self.attention_type == 'arch' and expect_mask_channel is False:
+            raise ValueError("attention_type='arch' requires a mask channel in the input, "
+                             "but expect_mask_channel is False.")
+        if mask_as_channel or self.attention_type == 'arch':
+            expect_mask_channel = True
+        self.mask_as_channel = mask_as_channel
+        self.expect_mask_channel = expect_mask_channel
+
         # == IMAGE SEQUENCE PROCESSING == #
         if use_imgseq:
             # Store frontcnn_out_hw for forward pass logic
@@ -202,9 +236,10 @@ class LakeDrainageClassifier(nn.Module):
             # or spatial mode (larger output -> ConvLSTM)
             self.use_vector_lstm = (self.effective_hw == (1, 1))
 
-            # (1) FrontCNN for imagery (RGB + optional spectral bands)
+            # (1) FrontCNN for imagery (RGB + optional spectral bands,
+            #     plus the mask when it is wired in as an input channel)
             self.frontcnn = FrontCNN(
-                in_channels=self.n_imagery_channels,
+                in_channels=self.n_imagery_channels + (1 if mask_as_channel else 0),
                 base_channels=frontcnn_base_channels,
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
@@ -335,9 +370,25 @@ class LakeDrainageClassifier(nn.Module):
 
         # == IMAGE SEQUENCE PROCESSING == #
         if self.use_imgseq:
+            # Channel-count check. Too few channels always crashed; too MANY were
+            # silently sliced off — so a "6-band" run could quietly train on 3
+            # bands (pre-CV audit B1). When the caller declares whether a mask
+            # channel is present, enforce the count exactly.
+            if self.expect_mask_channel is not None:
+                expected = self.n_imagery_channels + (1 if self.expect_mask_channel else 0)
+                if x.shape[2] != expected:
+                    raise RuntimeError(
+                        f"Input has {x.shape[2]} channels but the model expects {expected} "
+                        f"({self.n_imagery_channels} imagery"
+                        f"{' + 1 mask' if self.expect_mask_channel else ', no mask'}). "
+                        f"Check band flags / --cache_bands / mask settings.")
+
             # split the imagery channels and mask
             # Imagery is all channels except the last one (mask)
-            imagery = x[:, :, :self.n_imagery_channels, :, :]  # [B, T, n_imagery_channels, H, W]
+            if self.mask_as_channel:
+                imagery = x                                    # mask rides along as a real input channel
+            else:
+                imagery = x[:, :, :self.n_imagery_channels, :, :]  # [B, T, n_imagery_channels, H, W]
             mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
 
             # process imagery through FrontCNN

@@ -41,6 +41,42 @@ def worker_init(worker_id):
         blosc2.set_nthreads(1)
 
 
+# Band flags the model understands, keyed by Sentinel-2 band name.
+_EXTRA_BAND_FLAGS = {"B08": "use_nir", "B11": "use_swir16", "B12": "use_swir22"}
+_RGB_BANDS = {"B04", "B03", "B02"}
+
+
+def derive_band_flags(bands):
+    """Derive the model's spectral-band flags from a cache band list.
+
+    The classifier sizes its input from use_nir/use_swir16/use_swir22, NOT from
+    how many channels the dataset hands it — and it used to silently slice off
+    any extras (pre-CV audit B1: a "6-band" run could quietly train on 3 bands).
+    Deriving the flags from the band list makes that mismatch impossible.
+
+    Args:
+        bands: e.g. ["B04", "B03", "B02", "B08"].
+
+    Returns:
+        dict like {"use_nir": True, "use_swir16": False, "use_swir22": False}.
+
+    Raises:
+        ValueError: on a band name the model has no flag for, or missing RGB.
+    """
+    bands = list(bands)
+    unknown = [b for b in bands if b not in _RGB_BANDS and b not in _EXTRA_BAND_FLAGS]
+    if unknown:
+        raise ValueError(
+            f"Unknown band(s) {unknown}: the model only knows "
+            f"{sorted(_RGB_BANDS)} + {sorted(_EXTRA_BAND_FLAGS)}.")
+    missing_rgb = _RGB_BANDS - set(bands)
+    if missing_rgb:
+        raise ValueError(
+            f"RGB bands {sorted(missing_rgb)} missing from {bands}: the model "
+            f"assumes 3 RGB channels as its base input.")
+    return {flag: band in bands for band, flag in _EXTRA_BAND_FLAGS.items()}
+
+
 def normalize_batch(img_u16, boa_offset=None, nodata=NODATA_U16, n_refl=None):
     """raw DN -> float32 surface reflectance, on whatever device it is on.
 

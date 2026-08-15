@@ -41,13 +41,13 @@ def human(sec):
 
 
 def bench(cache_root, bands, mask, batch_size, workers, epochs,
-          seq_len, device, do_backward, grad_ckpt):
+          seq_len, device, do_backward, grad_ckpt, prefetch=2):
     ds = CachedLakeDataset(cache_root, bands=bands, mask=mask, seq_len=seq_len)
     n_ch = ds.n_channels
 
     loader = DataLoader(
         ds, batch_size=batch_size, shuffle=True, num_workers=workers,
-        pin_memory=torch.cuda.is_available(), prefetch_factor=2 if workers else None,
+        pin_memory=torch.cuda.is_available(), prefetch_factor=prefetch if workers else None,
         persistent_workers=False, worker_init_fn=worker_init, drop_last=False,
     )
 
@@ -103,7 +103,7 @@ def bench(cache_root, bands, mask, batch_size, workers, epochs,
         batches=nb // epochs, loader_s=t_load, step_s=t_step,
         compute_s=max(t_step - t_load, 0.0),
         samples_per_s=len(ds) / t_step, peak_vram_gb=peak,
-        queue_gb=workers * 2 * batch_size * sample_mb / 1024,
+        queue_gb=workers * prefetch * batch_size * sample_mb / 1024,
         sample_mb=sample_mb,
     )
 
@@ -119,6 +119,7 @@ def main():
     p.add_argument("--seq_len", type=int, default=153)
     p.add_argument("--host_mem_budget_gb", type=float, default=80.0)
     p.add_argument("--max_workers", type=int, default=12)
+    p.add_argument("--prefetch_factor", type=int, default=2)
     p.add_argument("--no_backward", action="store_true")
     p.add_argument("--no_grad_ckpt", action="store_true")
     p.add_argument("--out", default=None, help="write results as JSON")
@@ -142,11 +143,13 @@ def main():
     for bs in a.batch_sizes:
         workers, _, q = plan_loader_workers(
             batch_size=bs, sample_mb=sample_mb,
-            host_mem_budget_gb=a.host_mem_budget_gb, max_workers=a.max_workers)
+            host_mem_budget_gb=a.host_mem_budget_gb, max_workers=a.max_workers,
+            prefetch_factor=a.prefetch_factor)
         print(f"--- bs={bs}  workers={workers}  projected queue {q:.0f} GB ---")
         try:
             r = bench(a.cache_root, a.bands, a.mask, bs, workers, a.epochs,
-                      a.seq_len, device, not a.no_backward, not a.no_grad_ckpt)
+                      a.seq_len, device, not a.no_backward, not a.no_grad_ckpt,
+                      prefetch=a.prefetch_factor)
         except torch.cuda.OutOfMemoryError:
             print("    CUDA OOM -- skipping\n")
             torch.cuda.empty_cache()

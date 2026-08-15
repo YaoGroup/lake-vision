@@ -7,8 +7,8 @@
 #SBATCH --gpus=1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=256G
 #SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -33,19 +33,25 @@
 #      full-scale plan; $L_SCRATCH only exists inside an allocation)
 #   1. build a 200-lake blosc2 cache on node-local SSD
 #   2. benchmark dataloader-vs-compute at bs=8/32/64
-#   3. run real training for a few epochs at bs=32
+#   3. run real training for a few epochs at bs=8
 #
 # GO/NO-GO
 #   Extrapolated epoch time at N=1175 must land far below the ~14.5 min/epoch
 #   the old NetCDF pipeline took. If it does not, stop and re-plan before
 #   committing a multi-terabyte cache build.
 #
-# RESOURCES — deliberately 16 cores + 128 GB, which is exactly one GPU's share
-# of an A100 node (SH3_G4TF64: 64c/512G/4 GPUs). The ESSD scripts asked for
-# 320 GB against 1 GPU, which forces SLURM to strand 2 other A100s and is
-# probably a large part of past queue times. No GPU_MEM:80GB constraint either:
-# with the FrontCNN upsample removed and gradient checkpointing on, bs=64 needs
-# ~17 GB, so any 40 GB A100 works.
+# RESOURCES — 32 cores + 256 GB. Job 39080585 measured loader 32.9s vs compute
+# 14.9s at bs=8 with 12 workers on 16 cores (dataloader-bound 2.2:1), and the
+# node had 1007 GB RAM against our 128 GB request. The bottleneck is CPU-side
+# memory traffic, so cores are the resource that matters; doubling them should
+# put the loader at ~crossover with compute. prefetch_factor=1 because the
+# queue-size model undercounts real worker RSS by ~2x (collated batch, pinned
+# copy, IPC duplication) — that undercount is what OOM-killed bs=32 at 128 GB.
+#
+# Step 3 runs bs=8, not 32: without the chunked FrontCNN, bs=32 needs ~97 GB of
+# VRAM (FrontCNN pushes all B*T=4896 images through one conv call), which no
+# A100 has. bs=8 measured 28.0 GB. It is also apples-to-apples with the
+# ~14.5 min/epoch legacy baseline, which ran bs=8. Revisit after chunking lands.
 #
 # USAGE
 #   sbatch engine/training/run_training_cached_smoke.sh
@@ -155,8 +161,9 @@ python3 -u engine/benchmarks/bench_pipeline.py \
     --bands B04 B03 B02 \
     --batch_sizes 8 32 64 \
     --epochs 3 \
-    --host_mem_budget_gb 80 \
-    --max_workers 12 \
+    --host_mem_budget_gb 100 \
+    --max_workers 24 \
+    --prefetch_factor 1 \
     --out "$RESULTS_DIR/cache_bench_${SLURM_JOB_ID}.json"
 
 # --- 3. the real training path ----------------------------------------------
@@ -170,11 +177,12 @@ python3 -u engine/training/run_training.py \
     --use_cache --cache_root "$CACHE_DIR" \
     --cache_bands B04 B03 B02 \
     --scalar_var p_water \
-    --batch_size 32 \
+    --batch_size 8 \
     --epochs 5 \
     --gradient_checkpointing \
-    --host_mem_budget_gb 80 \
-    --num_workers 12 \
+    --host_mem_budget_gb 100 \
+    --num_workers 24 \
+    --prefetch_factor 1 \
     --train_ratio 0.7 --val_ratio 0.2 --test_ratio 0.1 \
     --wandb_name "cache_smoke_${SLURM_JOB_ID}" \
     --save_path "$MODELS_DIR/cache_smoke.pth"

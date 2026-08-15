@@ -789,7 +789,8 @@ def train(config: dict):
         if not cache_root:
             raise ValueError("--use_cache requires --cache_root")
         from lakevision.data.cached_dataset import (
-            CachedLakeDataset, normalize_batch, worker_init as _worker_init,
+            CachedLakeDataset, normalize_batch, derive_band_flags,
+            worker_init as _worker_init,
         )
 
         cache_kwargs = dict(
@@ -800,6 +801,21 @@ def train(config: dict):
             scalar_var=config.get("scalar_var", "p_water"),
             normalize_scalar=config.get("normalize_scalar", False),
         )
+
+        # The model sizes its input from use_nir/use_swir* — derive those flags
+        # from the band list so they can never disagree (pre-CV audit B1: extra
+        # channels used to be silently sliced off). A CLI flag that contradicts
+        # the band list is an error, not a preference.
+        derived_flags = derive_band_flags(cache_kwargs["bands"])
+        for flag, derived in derived_flags.items():
+            if config.get(flag, False) and not derived:
+                raise ValueError(
+                    f"--{flag} was passed but its band is not in "
+                    f"--cache_bands {cache_kwargs['bands']}")
+            config[flag] = derived
+        # Declare whether a mask channel rides along, so the model can assert
+        # the channel count instead of trusting it.
+        config["expect_mask_channel"] = cache_kwargs["mask"] is not None
         print(f"\n--- CACHED DATASET ---")
         print(f"cache_root:       {cache_root}")
         print(f"bands:            {cache_kwargs['bands']}")
@@ -819,6 +835,7 @@ def train(config: dict):
         normalize_fn = partial(normalize_batch, n_refl=_n_refl)
     else:
         _worker_init = None
+        config["expect_mask_channel"] = dataset_kwargs["use_mask"]
         preload_to_ram = config.get("preload_to_ram", False)
         train_dataset = LakeDataset(train_paths, preload_to_ram=preload_to_ram, **dataset_kwargs)
         val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
@@ -853,7 +870,7 @@ def train(config: dict):
     # budget instead of hardcoding them.
     # pin_memory=True enables async host→GPU transfer (overlap with compute).
     batch_size = config.get("batch_size", 8)
-    prefetch_factor = 2
+    prefetch_factor = config.get("prefetch_factor", 2)
 
     # Approximate per-sample MB as handed to the collate function:
     # seq_len * channels * H * W * 4 bytes (float32).
@@ -927,7 +944,10 @@ def train(config: dict):
         seq_len=seq_len,
         use_nir=config.get("use_nir", False),
         use_swir16=config.get("use_swir16", False),
+        use_swir22=config.get("use_swir22", False),
         attention_type=config.get("attention_type", "none"),
+        mask_as_channel=config.get("mask_as_channel", False),
+        expect_mask_channel=config.get("expect_mask_channel"),
         num_classes=num_classes,
         frontcnn_base_channels=config.get("frontcnn_base_channels", 8),
         frontcnn_num_layers=config.get("frontcnn_num_layers", 4),
@@ -1258,6 +1278,12 @@ def main():
                              "workers × prefetch × batch × 640MB. Default 12 paired "
                              "with --cpus-per-task=16 and --mem=256GB; gives ~35%% "
                              "headroom and saturates the GPU.")
+    parser.add_argument("--prefetch_factor", type=int, default=2,
+                        help="Batches each DataLoader worker keeps in flight. The "
+                             "queue scales linearly with it; 1 halves the queue's "
+                             "RAM footprint at large batch sizes. Real usage runs "
+                             "~2x the projected queue (collated batch per worker, "
+                             "pinned copy, IPC duplication are not counted).")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_lakes", type=int, default=None,
                         help="Cap each split (train/val/test) at this many lakes. "
@@ -1330,6 +1356,13 @@ def main():
     parser.add_argument("--attention_type", type=str, default="none",
                         choices=["none", "spatial", "full", "arch"],
                         help="Attention mechanism type")
+    parser.add_argument("--mask_as_channel", action="store_true", default=False,
+                        help="Feed the mask (static lake_boundary or dynamic "
+                             "water_mask_ndwi, whichever the dataset appends) into "
+                             "FrontCNN as a real input channel. Without this the mask "
+                             "is used ONLY by attention_type='arch' and silently "
+                             "discarded otherwise (the ESSD baseline behavior). "
+                             "Incompatible with 'arch'.")
     parser.add_argument("--num_classes", type=int, default=5,
                         help="Number of output classes (default 5 for ESSD baseline)")
     parser.add_argument("--frontcnn_base_channels", type=int, default=8)
