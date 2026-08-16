@@ -167,6 +167,8 @@ class LakeDrainageClassifier(nn.Module):
         # mask channel wiring (see docstring; default False reproduces ESSD)
         mask_as_channel=False,
         expect_mask_channel=None,
+        # raw-input normalization (see forward())
+        normalize_in_chunks=False,
         # classification and imagery configuration (these may not change)
         num_classes=4,
         input_H=512,
@@ -254,6 +256,11 @@ class LakeDrainageClassifier(nn.Module):
             expect_mask_channel = True
         self.mask_as_channel = mask_as_channel
         self.expect_mask_channel = expect_mask_channel
+
+        if normalize_in_chunks and frontcnn_chunk_size is None:
+            raise ValueError("normalize_in_chunks=True requires frontcnn_chunk_size; "
+                             "without chunking there is no loop to normalize inside.")
+        self.normalize_in_chunks = normalize_in_chunks
 
         # == IMAGE SEQUENCE PROCESSING == #
         if use_imgseq:
@@ -410,18 +417,28 @@ class LakeDrainageClassifier(nn.Module):
             activation=classhead_activation,
         )
 
-    def forward(self, x, area_seq, cloudy_seq):
+    def forward(self, x, area_seq, cloudy_seq, boa_offset=None, normalize_fn=None):
         """
         Forward pass through the model.
 
         Args:
-            x: [B, T, 4, H, W] tensor (RGB+mask) of image sequences
+            x: [B, T, 4, H, W] tensor (RGB+mask) of image sequences. Normally
+                float32 surface reflectance. With normalize_in_chunks=True this
+                is instead the RAW int16 tensor off the loader and is converted
+                chunk-by-chunk inside FrontCNN.
             area_seq: [B, T, 1] tensor of water area values
             cloudy_seq: [B, T, 1] tensor of cloud coverage values
+            boa_offset: [B, T] per-timestep BOA offset. Required when
+                normalize_in_chunks=True.
+            normalize_fn: callable(raw[N,C,H,W], boa[N], n_refl=int) -> float32.
+                Required when normalize_in_chunks=True; pass
+                lakevision.data.cached_dataset.normalize_batch.
 
         Returns:
             [B, num_classes] tensor of class logits
         """
+        if self.normalize_in_chunks and normalize_fn is None:
+            raise ValueError("normalize_in_chunks=True requires normalize_fn in forward()")
         features = []
 
         # == IMAGE SEQUENCE PROCESSING == #
@@ -447,8 +464,16 @@ class LakeDrainageClassifier(nn.Module):
                 imagery = x[:, :, :self.n_imagery_channels, :, :]  # [B, T, n_imagery_channels, H, W]
             mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
 
-            # process imagery through FrontCNN
-            if (self.gradient_checkpointing and self.training
+            # process imagery through FrontCNN. With normalize_in_chunks the raw
+            # int16 goes in and each chunk is converted inside the checkpointed
+            # region, so the full float32 tensor is never materialized.
+            if self.normalize_in_chunks:
+                n_refl = self.n_imagery_channels
+                img_features = self.frontcnn(
+                    imagery,
+                    chunk_transform=lambda sl, boa: normalize_fn(sl, boa, n_refl=n_refl),
+                    transform_arg=boa_offset)
+            elif (self.gradient_checkpointing and self.training
                     and not self.frontcnn.checkpoint_chunks):
                 img_features = checkpoint(self.frontcnn, imagery, use_reentrant=False)
             else:
@@ -472,7 +497,14 @@ class LakeDrainageClassifier(nn.Module):
                 # apply attention
                 if self.attention_type == 'arch':
                     # architectural attention fusion between separate mask pathway and imagery pathway
-                    if (self.gradient_checkpointing and self.training
+                    if self.normalize_in_chunks:
+                        # n_refl=0: the mask is an indicator, so it is rescaled but
+                        # the BOA offset is never added to it.
+                        mask_features = self.frontcnn_mask(
+                            mask,
+                            chunk_transform=lambda sl, boa: normalize_fn(sl, boa, n_refl=0),
+                            transform_arg=boa_offset)
+                    elif (self.gradient_checkpointing and self.training
                             and not self.frontcnn_mask.checkpoint_chunks):
                         mask_features = checkpoint(self.frontcnn_mask, mask, use_reentrant=False)
                     else:

@@ -247,3 +247,96 @@ class TestChunkMemory:
             gx, gw = grads(chunk, ckpt)
             assert (gx - gx0).abs().max() < 1e-12
             assert (gw - gw0).abs().max() / gw0.abs().max() < 1e-12
+
+
+class TestNormalizeInChunks:
+    """Converting int16 -> float32 inside FrontCNN's chunk loop.
+
+    The full float32 [B,T,C,H,W] input is B*T*C*H*W*4 bytes that live through
+    forward AND backward -- 20.5 GB at bs=32, T=153, 4 channels. That is what
+    OOMed job 39254653 on a 40 GB card once chunking had already flattened
+    FrontCNN's own activations. Normalizing per chunk keeps only the int16.
+    """
+
+    B, T, C, H, W = 2, 8, 4, 32, 32
+
+    def raw(self):
+        from lakevision.data.cached_dataset import DN_SCALE
+        torch.manual_seed(0)
+        x = (torch.randint(0, 5000, (self.B, self.T, self.C, self.H, self.W))
+             * int(DN_SCALE)).to(torch.int16)
+        x[:, :, 3] = int(10000 * 2)          # mask channel -> 1.0
+        return x, torch.zeros(self.B, self.T)
+
+    def nf(self):
+        from functools import partial
+        from lakevision.data.cached_dataset import normalize_batch
+        return partial(normalize_batch, n_refl=3)
+
+    def build(self, **kw):
+        torch.manual_seed(0)
+        return LakeDrainageClassifier(
+            use_imgseq=True, use_areaseq=False, use_cloudyseq=False,
+            seq_len=self.T, input_H=self.H, input_W=self.W,
+            frontcnn_base_channels=4, clstm_hidden=8, classhead_hidden=8,
+            num_classes=5, mask_as_channel=True, expect_mask_channel=True,
+            frontcnn_chunk_size=self.T, **kw)
+
+    def test_matches_normalizing_up_front(self):
+        """Must be bit-identical: same values, same order, just materialized later."""
+        raw, boa = self.raw()
+        nf = self.nf()
+        a = self.build().eval()
+        b = self.build(normalize_in_chunks=True).eval()
+        b.load_state_dict(a.state_dict())
+        with torch.no_grad():
+            up_front = a(nf(raw, boa), None, None)
+            in_chunks = b(raw, None, None, boa_offset=boa, normalize_fn=nf)
+        assert torch.equal(up_front, in_chunks)
+
+    def test_drops_the_float32_input_from_the_backward_graph(self):
+        raw, boa = self.raw()
+        nf = self.nf()
+
+        def saved(fn):
+            tot, seen = [0], set()
+            def pack(t):
+                if t.data_ptr() not in seen:
+                    seen.add(t.data_ptr())
+                    tot[0] += t.numel() * t.element_size()
+                return t
+            with torch.autograd.graph.saved_tensors_hooks(pack, lambda t: t):
+                fn().sum().backward()
+            return tot[0]
+
+        a = self.build(gradient_checkpointing=True).train()
+        b = self.build(gradient_checkpointing=True, normalize_in_chunks=True).train()
+        up_front = saved(lambda: a(nf(raw, boa), None, None))
+        in_chunks = saved(lambda: b(raw, None, None, boa_offset=boa, normalize_fn=nf))
+        # The float32 input is 2 bytes/element larger than the int16 it replaces.
+        expected_saving = raw.numel() * 2
+        assert up_front - in_chunks >= expected_saving * 0.9, (
+            f"expected to drop ~{expected_saving} bytes, got {up_front - in_chunks}")
+
+    def test_gradients_flow_to_model_parameters(self):
+        """Normalization sits between the input and the convs; a detach bug here
+        would silently zero every FrontCNN gradient."""
+        raw, boa = self.raw()
+        m = self.build(normalize_in_chunks=True).train()
+        m(raw, None, None, boa_offset=boa, normalize_fn=self.nf()).sum().backward()
+        w = m.frontcnn.conv_block[0].weight
+        assert w.grad is not None and w.grad.abs().sum() > 0
+
+    def test_requires_chunk_size(self):
+        with pytest.raises(ValueError, match="requires frontcnn_chunk_size"):
+            LakeDrainageClassifier(seq_len=self.T, input_H=self.H, input_W=self.W,
+                                   normalize_in_chunks=True)
+
+    def test_requires_normalize_fn_at_call_time(self):
+        raw, boa = self.raw()
+        m = self.build(normalize_in_chunks=True).eval()
+        with pytest.raises(ValueError, match="requires normalize_fn"):
+            m(raw, None, None, boa_offset=boa)
+
+    def test_default_off_keeps_float32_path(self):
+        assert self.build().normalize_in_chunks is False

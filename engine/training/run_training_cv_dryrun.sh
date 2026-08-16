@@ -40,8 +40,19 @@
 # 29.09 MB either way on a B*T=64 probe). Checkpointing the whole FrontCNN as
 # one segment does not help either: backward rebuilds the entire segment at
 # once. Only per-chunk checkpointing makes peak backward activation one chunk's
-# worth regardless of batch size. Projected: ~28 GB at bs=32, ~8.5 GB at bs=8.
-# If this job OOMs, that combination is not working and nothing downstream matters.
+# worth regardless of batch size. Measured: 28.0 -> 9.9 GB at bs=8 (job 39254647).
+#
+# That alone was NOT enough. Job 39254653 still OOMed at bs=32 (37.88 GB of a
+# 39.38 GB card), because flattening FrontCNN merely exposed the next term: the
+# float32 input itself is 20.5 GB at bs=32/T=153/4ch and lives through forward
+# AND backward. Hence the third flag:
+#
+#   --normalize_in_chunks       convert int16 -> float32 one chunk at a time,
+#                               inside the checkpointed region, so only the
+#                               int16 input persists (saves ~10.3 GB at bs=32)
+#
+# Projected with all three: ~27 GB at bs=32. Verified bit-identical to
+# normalizing up front, so this is a memory change only, not a model change.
 #
 # WHAT TO CHECK, IN ORDER
 #   1. "--- provenance ---" block names the commit (preflight).
@@ -179,6 +190,7 @@ python3 -u engine/training/run_training.py \
     `# checkpointing makes FrontCNN recompute ONE chunk at a time in backward. ---` \
     --frontcnn_chunk_size 153 \
     --gradient_checkpointing \
+    --normalize_in_chunks \
     `# --- axis 6: optimization hyperparameters ---` \
     --optimizer adamw \
     --lr 3e-4 \

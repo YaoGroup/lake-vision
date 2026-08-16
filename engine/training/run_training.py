@@ -39,6 +39,21 @@ from lakevision.data.transforms import (
 from lakevision.models.classifier import LakeDrainageClassifier
 
 
+def _forward(model, img_seq, area_seq, cloudy_seq, boa, normalize_fn):
+    """Run the model, normalizing either up front or inside FrontCNN's chunk loop.
+
+    normalize_in_chunks hands the RAW int16 straight to the model and converts
+    one chunk at a time inside the checkpointed region. That keeps the full
+    float32 [B,T,C,H,W] from ever existing -- 20.5 GB at bs=32/T=153/4ch, which
+    is what OOMed job 39254653 on a 40 GB card.
+    """
+    if getattr(model, "normalize_in_chunks", False):
+        return model(img_seq, area_seq, cloudy_seq,
+                     boa_offset=boa, normalize_fn=normalize_fn)
+    x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
+    return model(x, area_seq, cloudy_seq)
+
+
 def _build_checkpoint(model, config, epoch, metrics, class_names, num_classes):
     """Wrap a state_dict with everything needed to identify the run later.
 
@@ -373,12 +388,10 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
 
         if amp:
             with torch.autocast(device_type='cuda', dtype=amp_dtype):
-                x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
-                logits = model(x, area_seq, cloudy_seq)
+                logits = _forward(model, img_seq, area_seq, cloudy_seq, boa, normalize_fn)
                 loss = criterion(logits, labels)
         else:
-            x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
-            logits = model(x, area_seq, cloudy_seq)
+            logits = _forward(model, img_seq, area_seq, cloudy_seq, boa, normalize_fn)
             loss = criterion(logits, labels)
 
         # Scale loss by accumulation steps to maintain proper gradient magnitude
@@ -449,12 +462,10 @@ def evaluate(model, loader, criterion, device, num_classes=4, amp=False,
 
             if amp:
                 with torch.autocast(device_type='cuda', dtype=amp_dtype):
-                    x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
-                    logits = model(x, area_seq, cloudy_seq)
+                    logits = _forward(model, img_seq, area_seq, cloudy_seq, boa, normalize_fn)
                     loss = criterion(logits, labels)
             else:
-                x = normalize_fn(img_seq, boa) if normalize_fn else img_seq
-                logits = model(x, area_seq, cloudy_seq)
+                logits = _forward(model, img_seq, area_seq, cloudy_seq, boa, normalize_fn)
                 loss = criterion(logits, labels)
 
             total_loss += loss.item()
@@ -989,6 +1000,7 @@ def train(config: dict):
         use_swir22=config.get("use_swir22", False),
         attention_type=config.get("attention_type", "none"),
         mask_as_channel=config.get("mask_as_channel", False),
+        normalize_in_chunks=config.get("normalize_in_chunks", False),
         expect_mask_channel=config.get("expect_mask_channel"),
         num_classes=num_classes,
         frontcnn_base_channels=config.get("frontcnn_base_channels", 8),
@@ -1455,6 +1467,13 @@ def main():
                              "sequence length (153). FIX this in config — it is not a "
                              "scientific variable: differing chunk sizes diverge into "
                              "different weights through float non-associativity.")
+    parser.add_argument("--normalize_in_chunks", action="store_true", default=False,
+                        help="Hand raw int16 to the model and convert to float32 one "
+                             "FrontCNN chunk at a time, instead of materializing the "
+                             "whole float32 input up front. Saves B*T*C*H*W*4 bytes "
+                             "of VRAM (20.5 GB at bs=32, T=153, 4 channels) — this is "
+                             "what makes bs=32 fit a 40 GB card. Requires "
+                             "--frontcnn_chunk_size. Cached path only.")
     parser.add_argument("--clstm_forget_bias", type=float, default=0.0,
                         help="Initial forget-gate bias. 0.0 = ESSD. 1.0 stops the cell "
                              "state decaying ~0.5/step early in training.")
@@ -1522,6 +1541,12 @@ def main():
     args = parser.parse_args()
     if args.use_cache and not args.cache_root:
         parser.error("--use_cache requires --cache_root")
+    if args.normalize_in_chunks and not args.use_cache:
+        parser.error("--normalize_in_chunks only applies to the cached path: the "
+                     "legacy NetCDF loader already hands back float32, so there is "
+                     "no int16 to defer converting.")
+    if args.normalize_in_chunks and not args.frontcnn_chunk_size:
+        parser.error("--normalize_in_chunks requires --frontcnn_chunk_size")
     if not args.use_cache and not args.nc_dir:
         parser.error("--nc_dir is required unless --use_cache is set")
     config = vars(args)

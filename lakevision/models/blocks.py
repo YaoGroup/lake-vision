@@ -134,28 +134,53 @@ class FrontCNN(nn.Module):
         self.out_hw = out_hw
         self.pool = pool
 
-    def forward(self, x):
+    def forward(self, x, chunk_transform=None, transform_arg=None):
         """
         Forward pass of the FrontCNN block.
         Applies convolutional layers and pools conditionally to achieve desired output spatial dimensions.
+
+        Args:
+            x: [B, T, C, H, W]. Normally float32. When chunk_transform is given
+                this may instead be the RAW tensor (e.g. int16 DN straight off
+                the loader) and each chunk is converted inside the loop.
+            chunk_transform: optional callable ``f(chunk, arg_slice) -> chunk``
+                applied to each [n, C, H, W] slice before the conv stack, where
+                arg_slice is the matching slice of transform_arg along B*T.
+
+                This exists to keep the full-precision input from ever being
+                materialized. Converting int16 -> float32 up front costs
+                B*T*C*H*W*4 bytes that live for the whole forward AND backward:
+                20.5 GB at bs=32, T=153, 4 channels, which is what OOMed job
+                39254653 on a 40 GB card. Done per chunk *inside* the
+                checkpointed region, only one chunk's float32 exists at a time
+                and it is recomputed in backward rather than stored.
+            transform_arg: [B*T] (or [B, T]) tensor sliced alongside x and handed
+                to chunk_transform — the per-timestep BOA offset in practice.
         """
         B, T, C, H, W = x.shape
         x = x.reshape(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
+        if transform_arg is not None:
+            transform_arg = transform_arg.reshape(-1)
+
+        def run(sl, arg):
+            return self.conv_block(sl if chunk_transform is None
+                                   else chunk_transform(sl, arg))
 
         # Each op in conv_block is per-image, so slicing the B*T axis and
         # concatenating is exact (see the chunk_size note in the class docstring).
         # The memory win comes from checkpoint_chunks, NOT from chunking alone —
         # without it autograd still stores every chunk's activations.
         if self.chunk_size is None or self.chunk_size >= x.shape[0]:
-            x = self.conv_block(x)
+            x = run(x, transform_arg)
         else:
             ckpt = (self.checkpoint_chunks and self.training
                     and torch.is_grad_enabled())
             outs = []
             for i in range(0, x.shape[0], self.chunk_size):
                 sl = x[i:i + self.chunk_size]
-                outs.append(checkpoint(self.conv_block, sl, use_reentrant=False)
-                            if ckpt else self.conv_block(sl))
+                arg = None if transform_arg is None else transform_arg[i:i + self.chunk_size]
+                outs.append(checkpoint(run, sl, arg, use_reentrant=False)
+                            if ckpt else run(sl, arg))
             x = torch.cat(outs, dim=0)
         _, C_out, H_conv, W_conv = x.shape
 
