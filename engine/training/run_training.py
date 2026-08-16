@@ -1131,7 +1131,14 @@ def train(config: dict):
         eta_str = f"{int(eta_seconds // 3600)}h {int((eta_seconds % 3600) // 60)}m"
 
         # Print epoch summary
-        print(f"\nEpoch {epoch+1}/{epochs} | Time: {epoch_time:.1f}s | ETA: {eta_str}")
+        vram = ""
+        if torch.cuda.is_available():
+            # Peak VRAM is the number that decides whether a batch size is
+            # reachable at all. Reported per epoch because it is cheap and
+            # because "it did not OOM" says nothing about how much headroom is
+            # left for the next capacity increase.
+            vram = f" | peak VRAM: {torch.cuda.max_memory_allocated() / 1024**3:.1f} GB"
+        print(f"\nEpoch {epoch+1}/{epochs} | Time: {epoch_time:.1f}s | ETA: {eta_str}{vram}")
         print(f"  {'':12} {'Loss':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8}")
         print(f"  {'Train':12} {train_loss:>8.4f} {train_metrics['accuracy']:>8.3f} {train_metrics['precision_macro']:>8.3f} {train_metrics['recall_macro']:>8.3f} {train_metrics['f1_macro']:>8.3f}")
         print(f"  {'Val':12} {val_loss:>8.4f} {val_metrics['accuracy']:>8.3f} {val_metrics['precision_macro']:>8.3f} {val_metrics['recall_macro']:>8.3f} {val_metrics['f1_macro']:>8.3f}")
@@ -1190,6 +1197,11 @@ def train(config: dict):
     print("Training Complete!")
     print(f"  Total training time: {total_training_time / 3600:.2f} hours ({total_training_time:.1f} seconds)")
     print(f"  Average epoch time:  {avg_epoch_time:.1f} seconds")
+    if torch.cuda.is_available():
+        peak = torch.cuda.max_memory_allocated() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"  Peak VRAM:           {peak:.1f} GB of {total:.1f} GB "
+              f"({100 * peak / total:.0f}%)")
     print(f"  Best val loss:       {best_val_loss:.4f}")
     print(f"  Best val F1 (macro): {best_val_f1:.4f}")
     print("=" * 70)
