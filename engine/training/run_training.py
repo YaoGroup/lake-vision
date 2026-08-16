@@ -10,6 +10,7 @@ For wandb sweeps:
 """
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -38,14 +39,43 @@ from lakevision.data.transforms import (
 from lakevision.models.classifier import LakeDrainageClassifier
 
 
-def set_seed(seed: int):
-    """Set random seed for reproducibility across all libraries."""
+def _build_checkpoint(model, config, epoch, metrics, class_names, num_classes):
+    """Wrap a state_dict with everything needed to identify the run later.
+
+    A CV grid produces dozens of .pth files. Bare state_dicts leave no way to
+    tell which config, fold, or commit produced which file, and reconstructing
+    that after the fact is exactly the PROVENANCE_ESSD problem — cheap to
+    prevent, expensive to undo. LV_GIT_SHA is exported by engine/sherlock_preflight.sh.
+    """
+    return {
+        "state_dict": model.state_dict(),
+        "config": dict(config),
+        "epoch": epoch,
+        "metrics": metrics,
+        "class_names": list(class_names[:num_classes]),
+        "num_classes": num_classes,
+        "fold": config.get("fold_idx"),
+        "seed": config.get("seed"),
+        "git_sha": os.environ.get("LV_GIT_SHA"),
+        "wandb_run_id": (wandb.run.id if WANDB_AVAILABLE and wandb.run is not None
+                         else None),
+    }
+
+
+def set_seed(seed: int, deterministic: bool = True):
+    """Set random seed for reproducibility across all libraries.
+
+    deterministic=False keeps every seed fixed but lets cuDNN benchmark and pick
+    the fastest kernels. Across a many-trial CV sweep that is a real throughput
+    win; the cost is that runs are no longer bit-reproducible. Use False for the
+    grid, True for headline runs.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = not deterministic
 
 
 try:
@@ -483,7 +513,7 @@ def train(config: dict):
 
     # Seed and device
     seed = config.get("seed", 42)
-    set_seed(seed)
+    set_seed(seed, deterministic=config.get("deterministic", True))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Print configuration summary
@@ -964,8 +994,13 @@ def train(config: dict):
         frontcnn_base_channels=config.get("frontcnn_base_channels", 8),
         frontcnn_num_layers=config.get("frontcnn_num_layers", 4),
         frontcnn_out_hw=config.get("frontcnn_out_hw"),
+        frontcnn_norm=config.get("frontcnn_norm", "none"),
+        frontcnn_norm_groups=config.get("frontcnn_norm_groups", 8),
+        frontcnn_chunk_size=config.get("frontcnn_chunk_size"),
         clstm_hidden=config.get("clstm_hidden", 32),
         clstm_kernel=config.get("clstm_kernel", 3),
+        clstm_forget_bias=config.get("clstm_forget_bias", 0.0),
+        temporal_readout=config.get("temporal_readout", "last"),
         slstm_hidden=config.get("slstm_hidden", 16),
         slstm_num_layers=config.get("slstm_num_layers", 1),
         slstm_dropout=config.get("slstm_dropout", 0.0),
@@ -985,11 +1020,22 @@ def train(config: dict):
 
     # Loss and optimizer (weighted by inverse class frequency)
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=config.get("lr", 1e-4),
-        weight_decay=config.get("weight_decay", 0.0),
-    )
+    opt_name = config.get("optimizer", "adam").lower()
+    opt_kwargs = dict(lr=config.get("lr", 1e-4),
+                      weight_decay=config.get("weight_decay", 0.0))
+    if opt_name == "adam":
+        optimizer = torch.optim.Adam(model.parameters(), **opt_kwargs)
+    elif opt_name == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), **opt_kwargs)
+    elif opt_name == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(),
+                                    momentum=config.get("momentum", 0.9),
+                                    **opt_kwargs)
+    else:
+        raise ValueError(f"Unknown optimizer {opt_name!r}; "
+                         f"expected one of adam, adamw, sgd.")
+    print(f"Optimizer:      {opt_name} (lr={opt_kwargs['lr']}, "
+          f"weight_decay={opt_kwargs['weight_decay']})")
 
     # ESSD baseline uses a fixed learning rate (no scheduler) by default.
     # The --use_scheduler flag remains available for ablation experiments.
@@ -1096,11 +1142,14 @@ def train(config: dict):
             wandb.log(log_dict)
 
         # --- Checkpointing ---
+        epoch_1indexed_ckpt = epoch + 1
         # 1. Best val loss (canonical checkpoint — kept as the path the user passed)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             if best_loss_path is not None:
-                torch.save(model.state_dict(), best_loss_path)
+                torch.save(_build_checkpoint(model, config, epoch_1indexed_ckpt,
+                                             val_metrics, CLASS_NAMES, num_classes),
+                           best_loss_path)
                 print(f"  Saved best-val-loss model (val_loss={val_loss:.4f})")
 
         # 2. Best val macro F1 (separate file)
@@ -1108,14 +1157,18 @@ def train(config: dict):
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             if best_f1_path is not None:
-                torch.save(model.state_dict(), best_f1_path)
+                torch.save(_build_checkpoint(model, config, epoch_1indexed_ckpt,
+                                             val_metrics, CLASS_NAMES, num_classes),
+                           best_f1_path)
                 print(f"  Saved best-val-F1 model (val_f1_macro={val_f1:.4f})")
 
         # 3. Periodic snapshot every N epochs (for post-hoc analysis)
         epoch_1indexed = epoch + 1
         if epoch_1indexed % periodic_every == 0 and best_loss_path is not None:
             periodic = _periodic_path(epoch_1indexed)
-            torch.save(model.state_dict(), periodic)
+            torch.save(_build_checkpoint(model, config, epoch_1indexed,
+                                         val_metrics, CLASS_NAMES, num_classes),
+                       periodic)
             print(f"  Saved periodic snapshot: {periodic.name}")
 
     # Training timing summary
@@ -1377,6 +1430,52 @@ def main():
     parser.add_argument("--attention_type", type=str, default="none",
                         choices=["none", "spatial", "full", "arch"],
                         help="Attention mechanism type")
+    parser.add_argument("--optimizer", type=str, default="adam",
+                        choices=["adam", "adamw", "sgd"],
+                        help="Optimizer. ESSD baselines used adam.")
+    parser.add_argument("--momentum", type=float, default=0.9,
+                        help="Momentum for --optimizer sgd (ignored otherwise).")
+    parser.add_argument("--deterministic", action="store_true", default=True,
+                        help="cudnn.deterministic=True (default). Bit-reproducible.")
+    parser.add_argument("--no_deterministic", action="store_false", dest="deterministic",
+                        help="Let cuDNN benchmark and pick fastest kernels. Seeds stay "
+                             "fixed; only kernel selection varies. Recommended for the "
+                             "CV sweep, off for headline runs.")
+    parser.add_argument("--frontcnn_norm", type=str, default="none",
+                        choices=["none", "group", "batch"],
+                        help="Normalization after each FrontCNN conv. 'none' reproduces "
+                             "ESSD. There is currently NO normalization anywhere in the "
+                             "model, which is a leading suspect for the train-F1 ceiling.")
+    parser.add_argument("--frontcnn_norm_groups", type=int, default=8,
+                        help="Groups for --frontcnn_norm group.")
+    parser.add_argument("--frontcnn_chunk_size", type=int, default=None,
+                        help="Run FrontCNN over slices of the B*T image axis. Makes peak "
+                             "activation independent of batch size (96.8 -> 27.3 GB at "
+                             "bs=32) and is what lets bs=32 fit a 40 GB card. Set to the "
+                             "sequence length (153). FIX this in config — it is not a "
+                             "scientific variable: differing chunk sizes diverge into "
+                             "different weights through float non-associativity.")
+    parser.add_argument("--clstm_forget_bias", type=float, default=0.0,
+                        help="Initial forget-gate bias. 0.0 = ESSD. 1.0 stops the cell "
+                             "state decaying ~0.5/step early in training.")
+    parser.add_argument("--temporal_readout", type=str, default="last",
+                        choices=["last", "mean", "max"],
+                        help="How the CLSTM hidden sequence collapses to one vector. "
+                             "'last' = ESSD. mean/max cost no parameters and let the "
+                             "classifier see the whole season.")
+    parser.add_argument("--pool_type", type=str, default="avg",
+                        choices=["avg", "max", "both"],
+                        help="Spatial pooling before the class head. 'both' concatenates "
+                             "avg and max for ~1%% more parameters and preserves the "
+                             "localized peaks average pooling destroys.")
+    parser.add_argument("--fold_idx", type=int, default=None,
+                        help="Which CV fold this run is. Recorded in the checkpoint and "
+                             "logged to wandb so folds group correctly.")
+    parser.add_argument("--wandb_group", type=str, default=None,
+                        help="wandb group — set to the config name so a config's folds "
+                             "aggregate together.")
+    parser.add_argument("--wandb_tags", type=str, nargs="+", default=None,
+                        help="wandb tags for slicing the sweep.")
     parser.add_argument("--mask_as_channel", action="store_true", default=False,
                         help="Feed the mask (static lake_boundary or dynamic "
                              "water_mask_ndwi, whichever the dataset appends) into "
@@ -1443,6 +1542,8 @@ def main():
         wandb.init(
             project=args.wandb_project,
             name=args.wandb_name,
+            group=args.wandb_group,
+            tags=args.wandb_tags,
             config=config,
         )
         # Allow sweep to override config

@@ -79,8 +79,29 @@ class LakeDrainageClassifier(nn.Module):
                                         expensive for no gain. To reproduce those runs bit-for-bit, pass
                                         frontcnn_out_hw=(64,64) explicitly (see docs/PROVENANCE_ESSD.md).
         frontcnn_pool           (str): pooling type for FrontCNN ('max, 'avg', 'none') (default: 'max')
+        frontcnn_norm           (str): 'none' (default, ESSD-identical), 'group', or 'batch'.
+                                        Normalization after each conv. GroupNorm is immune to
+                                        both batch size and gradient checkpointing; BatchNorm
+                                        double-updates its running stats under checkpointing,
+                                        but with frontcnn_chunk_size=T it sees a fixed T images
+                                        regardless of batch size.
+        frontcnn_norm_groups    (int): groups for GroupNorm, clamped to channel count (default: 8)
+        frontcnn_chunk_size     (int or None): run the conv stack over slices of the B*T image
+                                        axis. Makes peak FrontCNN activation independent of
+                                        batch size (96.8 -> 27.3 GB at bs=32), which is what
+                                        makes bs=32 fit a 40 GB card at all. Exact for
+                                        norm != 'batch'. Set it in config and FIX it — it is
+                                        not a scientific variable. (default: None)
         clstm_hidden            (int): hidden channels for CLSTM (default: 32)
         clstm_kernel            (int): kernel size for CLSTM (default: 3)
+        clstm_forget_bias       (float): initial forget-gate bias (default: 0.0 = ESSD).
+                                        1.0 keeps the cell state from decaying ~0.5/step early
+                                        in training, which over T=153 erases mid-season events.
+        temporal_readout        (str): how the CLSTM hidden sequence collapses to one vector:
+                                        'last' (default, ESSD — final timestep only), 'mean',
+                                        or 'max' over T. mean/max add no parameters and let the
+                                        classifier see the whole season; 'last' also skips
+                                        stacking the hidden sequence entirely.
         slstm_hidden            (int): hidden dimension for scalar LSTMs (default: 16)
         slstm_num_layers        (int): number of layers for scalar LSTMs (default: 1)
         slstm_dropout           (float): dropout for scalar LSTMs (default: 0.0)
@@ -150,9 +171,14 @@ class LakeDrainageClassifier(nn.Module):
         frontcnn_num_layers=4,
         frontcnn_out_hw=None,
         frontcnn_pool='max',
+        frontcnn_norm='none',
+        frontcnn_norm_groups=8,
+        frontcnn_chunk_size=None,
         # CLSTM configuration
         clstm_hidden=32,
         clstm_kernel=3,
+        clstm_forget_bias=0.0,
+        temporal_readout='last',
         # scalar LSTM configuration
         slstm_hidden=16,
         slstm_num_layers=1,
@@ -184,6 +210,12 @@ class LakeDrainageClassifier(nn.Module):
         self.attention_type = attention_type.lower()
         self.pool_type = pool_type
         self.gradient_checkpointing = gradient_checkpointing
+
+        valid_readout = ['last', 'mean', 'max']
+        if temporal_readout not in valid_readout:
+            raise ValueError(f"Invalid temporal_readout '{temporal_readout}'. "
+                             f"Must be one of {valid_readout}.")
+        self.temporal_readout = temporal_readout
 
         # Calculate number of imagery channels (RGB + optional spectral bands)
         # Mask is handled separately in the forward pass
@@ -244,6 +276,9 @@ class LakeDrainageClassifier(nn.Module):
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
                 pool=frontcnn_pool,
+                norm=frontcnn_norm,
+                norm_groups=frontcnn_norm_groups,
+                chunk_size=frontcnn_chunk_size,
             )
             frontcnn_out_channels = self.frontcnn.output_channels
 
@@ -272,6 +307,9 @@ class LakeDrainageClassifier(nn.Module):
                     num_layers=frontcnn_num_layers,
                     out_hw=frontcnn_out_hw,
                     pool=frontcnn_pool,
+                    norm=frontcnn_norm,
+                    norm_groups=frontcnn_norm_groups,
+                    chunk_size=frontcnn_chunk_size,
                 )
             else: # no attention
                 self.attention = nn.Identity()
@@ -290,11 +328,15 @@ class LakeDrainageClassifier(nn.Module):
                 self.img_lstm_hidden = clstm_hidden
             else:
                 # Spatial mode: use ConvLSTM
+                # return_sequence only when the readout consumes more than the
+                # final state. At 'last' it used to stack all 153 hidden states
+                # (~1.2 GB at bs=32) purely to index [-1] and discard 152.
                 self.clstm = CLSTM(
                     input_channels=frontcnn_out_channels,
                     hidden_channels=clstm_hidden,
                     kernel_size=clstm_kernel,
-                    return_sequence=True,
+                    return_sequence=(temporal_readout != 'last'),
+                    forget_bias=clstm_forget_bias,
                 )
                 # (4) GLOBAL POOLING (only needed for spatial mode)
                 self.global_pool = GlobalPooling(pool_type=pool_type)
@@ -431,9 +473,17 @@ class LakeDrainageClassifier(nn.Module):
                 else:
                     lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
 
-                # aggregate by taking last timestep and global pooling
-                last_hidden = lstm_out[:, -1, :, :, :]   # [B, C_hidden, Hf, Wf]
-                img_features = self.global_pool(last_hidden.unsqueeze(1)).squeeze(1)  # [B, C_hidden] or [B, 2*C_hidden]
+                # Temporal readout. 'last' forces the drainage signal to survive
+                # up to ~150 recurrent steps to reach the classifier; mean/max
+                # over T read the whole sequence for free (no extra parameters).
+                if self.temporal_readout == 'last':
+                    # return_sequence=False, so lstm_out is already [B, C, Hf, Wf]
+                    hidden = lstm_out
+                elif self.temporal_readout == 'mean':
+                    hidden = lstm_out.mean(dim=1)
+                else:
+                    hidden = lstm_out.amax(dim=1)
+                img_features = self.global_pool(hidden.unsqueeze(1)).squeeze(1)  # [B, C_hidden] or [B, 2*C_hidden]
 
             features.append(img_features)
 

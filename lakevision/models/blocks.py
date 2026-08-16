@@ -22,6 +22,25 @@ class FrontCNN(nn.Module):
             conv output raises, since upsampling adds no information while
             multiplying downstream CLSTM cost by (target/conv)**2.
         pool (str): type of pooling to use (select from 'max', 'avg', or 'none')
+        norm (str): normalization after each Conv2d — 'none' (default, reproduces
+            ESSD), 'group' (GroupNorm, batch-independent), or 'batch' (BatchNorm2d).
+            See the chunk_size note below: with chunk_size=T, BatchNorm sees
+            exactly T images regardless of training batch size, so it does not
+            confound a batch-size sweep.
+        norm_groups (int): group count for GroupNorm, clamped to the channel count.
+        chunk_size (int or None): run the conv stack over slices of the flattened
+            B*T image axis instead of all at once. Every op here is per-image
+            (Conv2d/LeakyReLU/MaxPool2d/norm), so with norm != 'batch' this is
+            mathematically EXACT — only the cuDNN algorithm choice varies, at the
+            ~1e-6 level. What it buys is peak activation memory independent of
+            batch size: at bs=32, T=153 the first conv otherwise materializes
+            4,896 images at once (~38 GB). None (default) = no chunking.
+
+            NOTE for the CV grid: chunk_size is NOT a scientific variable. Fix it
+            in config. Two runs differing only in chunk_size diverge into
+            different weights through float non-associativity, and with
+            norm='batch' it genuinely changes the model (statistics are pooled
+            over the chunk).
 
     Input:
         x: [B, T, C, H, W] tensor of input image timestacks
@@ -50,11 +69,19 @@ class FrontCNN(nn.Module):
         >>> out = frontcnn(x) # output tensor [B=8, T=152, C_out=64, H_out=1, W_out=1]
     
     """
-    def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=None, pool='max'):
+    def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=None, pool='max',
+                 norm='none', norm_groups=8, chunk_size=None):
         super(FrontCNN, self).__init__()
 
         if pool not in ['max', 'avg', 'none']:
             raise ValueError(f"pool must be one of: 'max', 'avg', or 'none', but got '{pool}'")
+        if norm not in ['none', 'group', 'batch']:
+            raise ValueError(f"norm must be one of: 'none', 'group', or 'batch', but got '{norm}'")
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
+
+        self.norm = norm
+        self.chunk_size = chunk_size
 
         layers = []
         C_in = in_channels
@@ -62,6 +89,12 @@ class FrontCNN(nn.Module):
 
         for i in range(num_layers):
             layers.append(nn.Conv2d(C_in, C_out, kernel_size=3, padding=1))
+            if norm == 'group':
+                # GroupNorm has no running statistics and no batch dependence, so
+                # it is unaffected by both chunking and gradient checkpointing.
+                layers.append(nn.GroupNorm(min(norm_groups, C_out), C_out))
+            elif norm == 'batch':
+                layers.append(nn.BatchNorm2d(C_out))
             layers.append(nn.LeakyReLU(inplace=True))
             layers.append(nn.MaxPool2d(kernel_size=2)) # downsample by 2
             C_in = C_out
@@ -80,8 +113,16 @@ class FrontCNN(nn.Module):
         Applies convolutional layers and pools conditionally to achieve desired output spatial dimensions.
         """
         B, T, C, H, W = x.shape
-        x = x.view(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
-        x = self.conv_block(x) # apply convolutional layers -> e.g., [B*T, C=base_channels*(2**num_layers-1), H_out, W_out]
+        x = x.reshape(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
+
+        # Chunking keeps peak activation memory independent of batch size. Each
+        # op in conv_block is per-image, so slicing the B*T axis and
+        # concatenating is exact (see the chunk_size note in the class docstring).
+        if self.chunk_size is None or self.chunk_size >= x.shape[0]:
+            x = self.conv_block(x)
+        else:
+            x = torch.cat([self.conv_block(x[i:i + self.chunk_size])
+                           for i in range(0, x.shape[0], self.chunk_size)], dim=0)
         _, C_out, H_conv, W_conv = x.shape
 
         # Conditional pooling. out_hw=None means "keep whatever the conv stack
@@ -113,7 +154,7 @@ class FrontCNN(nn.Module):
 
         # reshape back to [B, T, C_out, H_out, W_out]
         _, C_out, H_out, W_out = x.shape
-        x = x.view(B, T, C_out, H_out, W_out)
+        x = x.reshape(B, T, C_out, H_out, W_out)
 
         return x
     
