@@ -28,6 +28,7 @@ import torch
 import netCDF4 as nc4
 
 from lakevision.models.classifier import LakeDrainageClassifier
+from lakevision.models.checkpoint import load_checkpoint, describe_checkpoint
 
 CLASS_NAMES = ["ND", "HF", "MD", "LD", "CD"]
 
@@ -97,10 +98,11 @@ def main():
     print(f"Loaded {len(ids)} ids from {args.ids_file}")
 
     model = build_model(device)
-    state = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    state, meta = load_checkpoint(args.checkpoint, map_location=device,
+                                  weights_only=True)
     model.load_state_dict(state)
     model.eval()
-    print(f"Loaded checkpoint: {args.checkpoint}")
+    print(f"Loaded checkpoint: {describe_checkpoint(args.checkpoint, meta)}")
 
     # --- Resume support: read any predictions already in output_csv and skip them. ---
     out_path = Path(args.output_csv)

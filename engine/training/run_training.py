@@ -30,6 +30,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lakevision.data import LakeDataset
+from lakevision.models.checkpoint import load_checkpoint, describe_checkpoint
 from lakevision.data.loader_plan import plan_loader_workers, sample_size_mb
 from lakevision.data.transforms import (
     AugmentedDatasetWrapper,
@@ -1218,10 +1219,14 @@ def train(config: dict):
         worker_init_fn=_worker_init,
     )
 
-    # Load best model for test evaluation
+    # Load best model for test evaluation. Goes through load_checkpoint because
+    # this script now SAVES a provenance dict — reading it back as a bare
+    # state_dict is what crashed job 39284581 after training succeeded.
     if config.get("save_path") and Path(config["save_path"]).exists():
-        model.load_state_dict(torch.load(config["save_path"], map_location=device))
-        print("Loaded best model for test evaluation")
+        state, meta = load_checkpoint(config["save_path"], map_location=device)
+        model.load_state_dict(state)
+        print(f"Loaded best model for test evaluation — "
+              f"{describe_checkpoint(config['save_path'], meta)}")
 
     test_loss, test_metrics = evaluate(
         model, test_loader, criterion, device, num_classes,

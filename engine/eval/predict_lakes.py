@@ -25,6 +25,7 @@ import netCDF4
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lakevision.models.classifier import LakeDrainageClassifier
+from lakevision.models.checkpoint import load_checkpoint, describe_checkpoint
 
 
 CLASS_NAMES = ['ND', 'HF', 'MD', 'LD', 'CD']
@@ -114,11 +115,11 @@ def main():
     )
 
     # Load checkpoint
-    state_dict = torch.load(args.checkpoint, map_location=device)
+    state_dict, meta = load_checkpoint(args.checkpoint, map_location=device)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    print(f'Loaded checkpoint: {args.checkpoint}')
+    print(f'Loaded checkpoint: {describe_checkpoint(args.checkpoint, meta)}')
     print(f'Parameters: {sum(p.numel() for p in model.parameters()):,}')
 
     nc_dir = Path(args.nc_dir)
