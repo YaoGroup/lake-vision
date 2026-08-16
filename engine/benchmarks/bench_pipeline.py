@@ -41,7 +41,7 @@ def human(sec):
 
 
 def bench(cache_root, bands, mask, batch_size, workers, epochs,
-          seq_len, device, do_backward, grad_ckpt, prefetch=2):
+          seq_len, device, do_backward, grad_ckpt, prefetch=2, chunk_size=None):
     ds = CachedLakeDataset(cache_root, bands=bands, mask=mask, seq_len=seq_len)
     n_ch = ds.n_channels
 
@@ -66,6 +66,11 @@ def bench(cache_root, bands, mask, batch_size, workers, epochs,
         num_classes=5, seq_len=seq_len,
         use_nir="B08" in bands, use_swir16="B11" in bands,
         frontcnn_out_hw=None,          # no upsample: CLSTM sees 32x32
+        # Must match what training will actually run. Without chunking, FrontCNN
+        # pushes all B*T images through the first conv at once -- ~97 GB at
+        # bs=32 -- so the large-batch rows OOM and the benchmark silently
+        # reports only bs=8.
+        frontcnn_chunk_size=chunk_size,
         gradient_checkpointing=grad_ckpt,
     ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -120,10 +125,17 @@ def main():
     p.add_argument("--host_mem_budget_gb", type=float, default=80.0)
     p.add_argument("--max_workers", type=int, default=12)
     p.add_argument("--prefetch_factor", type=int, default=2)
+    p.add_argument("--frontcnn_chunk_size", type=int, default=None,
+                   help="Slice the B*T axis in FrontCNN so peak activation is "
+                        "independent of batch size. Defaults to --seq_len; pass 0 "
+                        "to disable and reproduce the pre-chunking measurements.")
     p.add_argument("--no_backward", action="store_true")
     p.add_argument("--no_grad_ckpt", action="store_true")
     p.add_argument("--out", default=None, help="write results as JSON")
     a = p.parse_args()
+
+    chunk_size = a.seq_len if a.frontcnn_chunk_size is None else a.frontcnn_chunk_size
+    chunk_size = chunk_size or None          # 0 -> None (explicitly unchunked)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("=" * 78)
@@ -134,6 +146,7 @@ def main():
     print(f"cache       : {a.cache_root}")
     print(f"bands       : {a.bands}   mask: {a.mask}")
     print(f"grad ckpt   : {not a.no_grad_ckpt}")
+    print(f"chunk size  : {chunk_size}")
     print(f"epochs/pt   : {a.epochs}\n")
 
     n_ch = len(a.bands) + (1 if a.mask else 0)
@@ -149,7 +162,7 @@ def main():
         try:
             r = bench(a.cache_root, a.bands, a.mask, bs, workers, a.epochs,
                       a.seq_len, device, not a.no_backward, not a.no_grad_ckpt,
-                      prefetch=a.prefetch_factor)
+                      prefetch=a.prefetch_factor, chunk_size=chunk_size)
         except torch.cuda.OutOfMemoryError:
             print("    CUDA OOM -- skipping\n")
             torch.cuda.empty_cache()
