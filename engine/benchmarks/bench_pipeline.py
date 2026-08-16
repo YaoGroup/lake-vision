@@ -41,13 +41,15 @@ def human(sec):
 
 
 def bench(cache_root, bands, mask, batch_size, workers, epochs,
-          seq_len, device, do_backward, grad_ckpt, prefetch=2, chunk_size=None):
+          seq_len, device, do_backward, grad_ckpt, prefetch=2, chunk_size=None,
+          pin_memory=None):
     ds = CachedLakeDataset(cache_root, bands=bands, mask=mask, seq_len=seq_len)
     n_ch = ds.n_channels
 
     loader = DataLoader(
         ds, batch_size=batch_size, shuffle=True, num_workers=workers,
-        pin_memory=torch.cuda.is_available(), prefetch_factor=prefetch if workers else None,
+        pin_memory=(torch.cuda.is_available() if pin_memory is None else pin_memory),
+        prefetch_factor=prefetch if workers else None,
         persistent_workers=False, worker_init_fn=worker_init, drop_last=False,
     )
 
@@ -105,6 +107,7 @@ def bench(cache_root, bands, mask, batch_size, workers, epochs,
     sample_mb = seq_len * n_ch * 512 * 512 * 2 / 1024**2   # uint16 handoff
     return dict(
         batch_size=batch_size, workers=workers, n_lakes=len(ds), n_channels=n_ch,
+        pin_memory=(torch.cuda.is_available() if pin_memory is None else pin_memory),
         batches=nb // epochs, loader_s=t_load, step_s=t_step,
         compute_s=max(t_step - t_load, 0.0),
         samples_per_s=len(ds) / t_step, peak_vram_gb=peak,
@@ -125,6 +128,15 @@ def main():
     p.add_argument("--host_mem_budget_gb", type=float, default=80.0)
     p.add_argument("--max_workers", type=int, default=12)
     p.add_argument("--prefetch_factor", type=int, default=2)
+    p.add_argument("--pin_memory", dest="pin_memory", action="store_true", default=None,
+                   help="Force pinned host memory (default: on when CUDA is present).")
+    p.add_argument("--no_pin_memory", dest="pin_memory", action="store_false",
+                   help="Disable pinning. The loader-only grid in diagnose_loader.py "
+                        "showed 1.6-1.9x faster WITHOUT pinning -- but pinning is what "
+                        "makes the H2D copy async, so the saving may simply move into "
+                        "the step. This flag exists to measure the FULL step both ways "
+                        "and settle that; do not change the training default on the "
+                        "loader-only number alone.")
     p.add_argument("--frontcnn_chunk_size", type=int, default=None,
                    help="Slice the B*T axis in FrontCNN so peak activation is "
                         "independent of batch size. Defaults to --seq_len; pass 0 "
@@ -147,6 +159,7 @@ def main():
     print(f"bands       : {a.bands}   mask: {a.mask}")
     print(f"grad ckpt   : {not a.no_grad_ckpt}")
     print(f"chunk size  : {chunk_size}")
+    print(f"pin_memory  : {'auto' if a.pin_memory is None else a.pin_memory}")
     print(f"epochs/pt   : {a.epochs}\n")
 
     n_ch = len(a.bands) + (1 if a.mask else 0)
@@ -162,7 +175,8 @@ def main():
         try:
             r = bench(a.cache_root, a.bands, a.mask, bs, workers, a.epochs,
                       a.seq_len, device, not a.no_backward, not a.no_grad_ckpt,
-                      prefetch=a.prefetch_factor, chunk_size=chunk_size)
+                      prefetch=a.prefetch_factor, chunk_size=chunk_size,
+                      pin_memory=a.pin_memory)
         except torch.cuda.OutOfMemoryError:
             print("    CUDA OOM -- skipping\n")
             torch.cuda.empty_cache()
