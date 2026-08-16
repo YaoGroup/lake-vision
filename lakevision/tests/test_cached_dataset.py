@@ -325,3 +325,54 @@ def test_wire_dtype_is_installable_on_torch_22():
     a = np.zeros((2, 2), dtype=np.uint16)
     wire = torch.from_numpy(a.view(np.int16))
     assert wire.dtype in torch_22_safe
+
+
+# --------------------------------------------------------------------------
+# cloudy_seq: no silent substitution
+#
+# This slot used to receive eo_cloud_cover/100 whenever cloudy_seq_rgb was
+# absent -- a scene-level ESA percentage with INVERTED polarity against the
+# cloudy-tile CNN flag (1 = useful) the legacy NC path feeds. That made the
+# cached and legacy pipelines disagree about what the "cloudy flag" grid axis
+# even measures, silently.
+# --------------------------------------------------------------------------
+
+def test_cloudy_seq_defaults_to_zeros_not_eo_cloud_cover(tmp_path):
+    """The fixture writes eo_cloud_cover=50.0; it must NOT leak through."""
+    _write_cache(tmp_path, ["L1"])
+    ds = CachedLakeDataset(tmp_path, lake_ids=["L1"], bands=BANDS,
+                           labels_dict={"L1": 0}, seq_len=T)
+    cloudy = ds[0][2]
+    assert torch.equal(cloudy, torch.zeros_like(cloudy)), (
+        "cloudy_seq must be zeros when no cloudy_seq_var is requested; "
+        "0.5 would mean eo_cloud_cover/100 leaked back in")
+
+
+def test_cloudy_seq_var_is_read_when_present(tmp_path):
+    _write_cache(tmp_path, ["L1"])
+    p = tmp_path / "scalars" / "L1.npz"
+    existing = dict(np.load(p))
+    existing["cloudy_seq_rgb"] = np.array([1, 0, 1, 1][:T], dtype=np.float32)
+    np.savez(p, **existing)
+
+    ds = CachedLakeDataset(tmp_path, lake_ids=["L1"], bands=BANDS,
+                           labels_dict={"L1": 0}, seq_len=T,
+                           cloudy_seq_var="cloudy_seq_rgb")
+    assert ds[0][2].flatten().tolist() == [1.0, 0.0, 1.0, 1.0][:T]
+
+
+def test_missing_cloudy_seq_var_raises(tmp_path):
+    _write_cache(tmp_path, ["L1"])
+    ds = CachedLakeDataset(tmp_path, lake_ids=["L1"], bands=BANDS,
+                           labels_dict={"L1": 0}, seq_len=T,
+                           cloudy_seq_var="cloudy_seq_rgb")
+    with pytest.raises(KeyError, match="cloudy_seq_rgb"):
+        _ = ds[0]
+
+
+@pytest.mark.parametrize("bad", ["eo_cloud_cover", "pct_nans"])
+def test_rejected_cloudy_sources(tmp_path, bad):
+    _write_cache(tmp_path, ["L1"])
+    with pytest.raises(ValueError, match="not a valid cloudy-flag source"):
+        CachedLakeDataset(tmp_path, lake_ids=["L1"], bands=BANDS,
+                          labels_dict={"L1": 0}, seq_len=T, cloudy_seq_var=bad)

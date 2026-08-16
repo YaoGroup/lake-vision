@@ -94,7 +94,56 @@ def _decode_band_names(nc):
     return [n.replace("\x00", "").strip() for n in names]
 
 
-def build_one(nc_path, out_root, bands, masks, overwrite=False):
+def _decode_time(tvar):
+    """CF-decode a time variable to python datetimes.
+
+    The two trees encode the SAME daily grid with different epochs — v2 uses
+    'days since 1970-01-01' (calendar 'standard'), the composites use 'days
+    since <year>-05-01' ('proleptic_gregorian'). Comparing raw integers would
+    call an identical axis a mismatch, so decode before comparing.
+    """
+    return netCDF4.num2date(
+        tvar[:], getattr(tvar, "units"), getattr(tvar, "calendar", "standard"),
+        only_use_cftime_datetimes=False, only_use_python_datetimes=True)
+
+
+def _read_cloudy_seq(composites_root, lake_id, year_dir, nc_time, var):
+    """Pull the cloudy-tile flag for one lake out of the v1 composites.
+
+    The published v2 stacks carry no cloudy_seq_* variable — cloudy-tile ran in
+    April 2026 as phase 2 of run_synthesize_region.sh, writing cloudy_seq_rgb
+    into composites/ built from stacks/ (v1). stacks_v2/ was a later full
+    rebuild from STAC, so the flag lives in a different tree than the imagery
+    we cache.
+
+    Transplanting rather than re-running is only legitimate because both trees
+    were verified to carry bit-identical pixels on a fixed May 1 - Sep 30 daily
+    grid (checked on 4 lakes across both years: identical time axes, identical
+    NaN patterns, max |v1 - v2| = 0 on every data-bearing timestep). The time
+    equality assert below re-checks the alignment half of that per lake, so a
+    mismatched pair fails loudly instead of silently shifting labels in time.
+    """
+    src = Path(composites_root) / year_dir / f"{lake_id}.nc"
+    if not src.exists():
+        raise FileNotFoundError(
+            f"{lake_id}: no composite at {src}, so {var} cannot be transplanted.")
+    with netCDF4.Dataset(str(src)) as cnc:
+        cnc.set_auto_mask(False)
+        if var not in cnc.variables:
+            raise KeyError(f"{lake_id}: composite has no {var} "
+                           f"(has {sorted(cnc.variables)})")
+        c_time = _decode_time(cnc.variables["time"])
+        if not np.array_equal(c_time, nc_time):
+            raise ValueError(
+                f"{lake_id}: composite and v2 time axes differ, so {var} would "
+                f"be misaligned in time. Refusing to transplant. "
+                f"v2 {nc_time[0]}..{nc_time[-1]} (n={len(nc_time)}) vs "
+                f"composite {c_time[0]}..{c_time[-1]} (n={len(c_time)})")
+        return np.asarray(cnc.variables[var][:], dtype=np.float32)
+
+
+def build_one(nc_path, out_root, bands, masks, overwrite=False,
+              composites_root=None, cloudy_var="cloudy_seq_rgb"):
     """Convert a single v2 stack to cache files. Returns dict of bytes written."""
     lake_id = nc_path.stem
     written = {}
@@ -161,6 +210,10 @@ def build_one(nc_path, out_root, bands, masks, overwrite=False):
             if s in nc.variables:
                 sc[s] = np.asarray(nc.variables[s][:], dtype=np.float32)
         sc["time"] = np.asarray(nc.variables["time"][:], dtype=np.int64)
+        if composites_root:
+            sc[cloudy_var] = _read_cloudy_seq(
+                composites_root, lake_id, nc_path.parent.name,
+                _decode_time(nc.variables["time"]), cloudy_var)
         if "drainage_label" in nc.variables:
             sc["drainage_label"] = np.asarray(nc.variables["drainage_label"][:])
 
@@ -190,6 +243,16 @@ def main():
                         "P(water|cloudy)/P(water|clear) = 0.16x).")
     p.add_argument("--limit", type=int, default=None,
                    help="Cache only the first N lakes per year (prototype).")
+    p.add_argument("--composites_root", default=None,
+                   help="Optional composites/ tree (built from the v1 stacks) to "
+                        "transplant the cloudy-tile flag from. The published v2 "
+                        "stacks carry no cloudy_seq_* variable; cloudy-tile ran "
+                        "on the composites in April 2026. Both trees were verified "
+                        "to hold bit-identical pixels on the same fixed daily time "
+                        "grid, and the per-lake time axes are re-asserted at "
+                        "transplant time, so this needs no GPU re-inference.")
+    p.add_argument("--cloudy_seq_var", default="cloudy_seq_rgb",
+                   help="Variable to transplant from --composites_root.")
     p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
 
@@ -207,6 +270,8 @@ def main():
     print(f"Building cache for {len(files)} lakes")
     print(f"  bands : {args.bands}")
     print(f"  masks : {args.masks}")
+    if args.composites_root:
+        print(f"  cloudy: {args.cloudy_seq_var} <- {args.composites_root}")
     print(f"  out   : {out_root}")
     print(f"  codec : LZ4 + bitshuffle, clevel 5\n")
 
@@ -215,7 +280,9 @@ def main():
     for i, fp in enumerate(files, 1):
         src_bytes += fp.stat().st_size
         lake_id, w = build_one(fp, out_root, args.bands, args.masks,
-                               overwrite=args.overwrite)
+                               overwrite=args.overwrite,
+                               composites_root=args.composites_root,
+                               cloudy_var=args.cloudy_seq_var)
         ids.append(lake_id)
         for k, v in w.items():
             totals[k] = totals.get(k, 0) + v

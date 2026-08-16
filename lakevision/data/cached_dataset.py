@@ -165,6 +165,18 @@ class CachedLakeDataset(Dataset):
             and per-sample min-max would erase cross-lake amplitude (a lake that
             only ever half-fills gets stretched to look like one that fills
             completely, which is plausibly the ND signal).
+        cloudy_seq_var: which cached scalar feeds cloudy_seq, e.g.
+            'cloudy_seq_rgb' (the cloudy-tile CNN's per-timestep 1=useful /
+            0=cloudy-or-nodata flag). None (default) emits zeros, which is only
+            valid when the model runs with use_cloudyseq=False.
+
+            There is deliberately NO fallback to another scalar. This slot used
+            to silently receive ``eo_cloud_cover/100`` when cloudy_seq_rgb was
+            absent -- a *scene-level ESA cloud percentage with inverted
+            polarity*, not the tile-level learned usefulness flag the legacy
+            path feeds. Substituting it made the cached and legacy pipelines
+            disagree on what "the cloudy flag axis" even means. A missing
+            variable now raises.
     """
 
     def __init__(
@@ -177,6 +189,7 @@ class CachedLakeDataset(Dataset):
         seq_len: int = 153,
         scalar_var: str = "p_water",
         normalize_scalar: bool = False,
+        cloudy_seq_var: Optional[str] = None,
     ):
         if blosc2 is None:
             raise ImportError("blosc2 is required. pip install --user blosc2")
@@ -188,6 +201,14 @@ class CachedLakeDataset(Dataset):
         self.seq_len = seq_len
         self.scalar_var = scalar_var
         self.normalize_scalar = normalize_scalar
+        self.cloudy_seq_var = cloudy_seq_var
+        if cloudy_seq_var in ("eo_cloud_cover", "pct_nans"):
+            raise ValueError(
+                f"cloudy_seq_var={cloudy_seq_var!r} is not a valid cloudy-flag "
+                f"source for JSTARS training. eo_cloud_cover is a scene-level ESA "
+                f"percentage (not tile-level, and inverted in polarity vs the "
+                f"cloudy-tile CNN); pct_nans measures only the nodata half. Use "
+                f"the cloudy-tile output (e.g. 'cloudy_seq_rgb') or leave it None.")
 
         if lake_ids is None:
             manifest = self.root / "manifest.json"
@@ -261,8 +282,17 @@ class CachedLakeDataset(Dataset):
             if "boa_add_offset" in sc else np.zeros(img.shape[0], dtype=np.float32)
         boa = self._fit_time(boa)
 
-        cloudy = np.nan_to_num(sc["eo_cloud_cover"].astype(np.float32), nan=0.0) / 100.0 \
-            if "eo_cloud_cover" in sc else np.zeros(img.shape[0], dtype=np.float32)
+        if self.cloudy_seq_var is None:
+            # Zeros, not a substitute scalar. Only valid with use_cloudyseq=False.
+            cloudy = np.zeros(img.shape[0], dtype=np.float32)
+        elif self.cloudy_seq_var in sc:
+            cloudy = np.nan_to_num(sc[self.cloudy_seq_var].astype(np.float32), nan=0.0)
+        else:
+            raise KeyError(
+                f"cloudy_seq_var={self.cloudy_seq_var!r} is not in the cache for "
+                f"{lake_id}. Cached scalars: {sorted(sc.files)}. The published v2 "
+                f"stacks carry no cloudy_seq_* variable — it must be added to the "
+                f"source stacks and re-cached before this axis can be trained.")
         cloudy = self._fit_time(cloudy)
 
         # Sherlock's py-pytorch/2.2.1 has no uint16 tensor dtype — uint8 is the

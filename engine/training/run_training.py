@@ -800,7 +800,19 @@ def train(config: dict):
             seq_len=config.get("seq_len", 153),
             scalar_var=config.get("scalar_var", "p_water"),
             normalize_scalar=config.get("normalize_scalar", False),
+            cloudy_seq_var=config.get("cache_cloudy_seq_var"),
         )
+        # The cached path used to substitute eo_cloud_cover here — a scene-level
+        # ESA percentage with inverted polarity vs the cloudy-tile CNN flag the
+        # legacy path reads. Training the cloudy axis on that would measure a
+        # different variable than the earlier ablations did.
+        if config.get("use_cloudyseq") and not cache_kwargs["cloudy_seq_var"]:
+            raise ValueError(
+                "--use_cloudyseq on the cached path requires "
+                "--cache_cloudy_seq_var (e.g. cloudy_seq_rgb). The published v2 "
+                "stacks carry no cloudy_seq_* variable, so it must be added to "
+                "the source stacks and re-cached first. Refusing to train on "
+                "zeros or on a substitute scalar.")
 
         # The model sizes its input from use_nir/use_swir* — derive those flags
         # from the band list so they can never disagree (pre-CV audit B1: extra
@@ -1315,6 +1327,15 @@ def main():
                         help="Sequence length for temporal window")
     parser.add_argument("--band_stats", type=str, default=None,
                         help="Path to band statistics JSON for normalization")
+    parser.add_argument("--cache_cloudy_seq_var", type=str, default=None,
+                        help="Cached scalar feeding cloudy_seq on the --use_cache "
+                             "path, e.g. 'cloudy_seq_rgb' (cloudy-tile CNN, "
+                             "1=useful / 0=cloudy-or-nodata). Unset emits zeros and "
+                             "is only valid with --no_cloudyseq. eo_cloud_cover and "
+                             "pct_nans are rejected: the former is a scene-level ESA "
+                             "percentage with inverted polarity, the latter covers "
+                             "only the nodata half. (The legacy NC path uses "
+                             "--cloudy_seq_var instead.)")
     parser.add_argument("--cloudy_seq_var", type=str, default="cloudy_seq_rgb",
                         help="Name of cloudy_seq variable in NC files")
     parser.add_argument("--augment", action="store_true", default=False,
@@ -1432,6 +1453,7 @@ def main():
         config["use_cache"] = args.use_cache
         config["cache_root"] = args.cache_root
         config["cache_bands"] = args.cache_bands
+        config["cache_cloudy_seq_var"] = args.cache_cloudy_seq_var
         config["cache_mask"] = args.cache_mask
         config["test_labels_csv"] = args.test_labels_csv
         config["train_ids_file"] = args.train_ids_file
