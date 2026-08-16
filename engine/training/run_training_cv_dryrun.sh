@@ -27,19 +27,30 @@
 # than passing unnoticed. Do not read the F1 numbers as meaningful: 5 epochs on
 # 300 lakes is noise.
 #
-# WHY bs=32 IS THE POINT. Before the chunked FrontCNN, bs=32 needed ~97 GB of
-# VRAM: FrontCNN flattens [B,T,C,H,W] -> [B*T,C,H,W] and pushed 4,896 images
-# through the first conv in one call (job 39080585 measured 28.0 GB at bs=8 and
-# host-OOMed at bs=32). --frontcnn_chunk_size 153 slices that axis, making peak
-# FrontCNN activation independent of batch size — projected 27.3 GB at bs=32.
-# If this job OOMs, the chunking is not working and nothing downstream matters.
+# WHY bs=32 IS THE POINT. FrontCNN flattens [B,T,C,H,W] -> [B*T,C,H,W], so at
+# bs=32 it pushes 4,896 images through the first conv (job 39080585 measured
+# 28.0 GB at bs=8 and host-OOMed at bs=32). Two flags together fix that, and
+# BOTH are needed:
+#
+#   --frontcnn_chunk_size 153   slices the B*T axis
+#   --gradient_checkpointing    checkpoints EACH chunk separately
+#
+# Chunking alone saves NO training memory — autograd stores every chunk's
+# activations, so the total is identical to the unchunked pass (measured:
+# 29.09 MB either way on a B*T=64 probe). Checkpointing the whole FrontCNN as
+# one segment does not help either: backward rebuilds the entire segment at
+# once. Only per-chunk checkpointing makes peak backward activation one chunk's
+# worth regardless of batch size. Projected: ~28 GB at bs=32, ~8.5 GB at bs=8.
+# If this job OOMs, that combination is not working and nothing downstream matters.
 #
 # WHAT TO CHECK, IN ORDER
 #   1. "--- provenance ---" block names the commit (preflight).
 #   2. MODEL SUMMARY shows GroupNorm layers in FrontCNN, and a parameter count
 #      ABOVE the 139,925 baseline (pool_type=both + clstm_hidden=64).
 #   3. "Optimizer: adamw" — proves the optimizer axis is live, not hardcoded.
-#   4. Peak VRAM well under 40 GB at bs=32. This is the chunking gate.
+#   4. Peak VRAM well under 40 GB at bs=32. This is the chunking gate — and it
+#      only holds if BOTH --frontcnn_chunk_size and --gradient_checkpointing are
+#      in the command below.
 #   5. Five epochs complete; per-epoch wall-clock is the number to size the grid.
 #   6. The saved .pth loads as a dict with config/fold/git_sha (see TO VERIFY).
 #
@@ -163,8 +174,11 @@ python3 -u engine/training/run_training.py \
     --frontcnn_base_channels 8 \
     --frontcnn_num_layers 4 \
     --frontcnn_norm group \
-    `# --- memory knob: FIXED, never a grid axis ---` \
+    `# --- memory knobs: FIXED, never grid axes. BOTH are required: ---` \
+    `# chunking alone saves nothing (autograd keeps every chunk's activations); ---` \
+    `# checkpointing makes FrontCNN recompute ONE chunk at a time in backward. ---` \
     --frontcnn_chunk_size 153 \
+    --gradient_checkpointing \
     `# --- axis 6: optimization hyperparameters ---` \
     --optimizer adamw \
     --lr 3e-4 \

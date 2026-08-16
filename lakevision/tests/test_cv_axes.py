@@ -167,3 +167,83 @@ class TestPoolType:
         assert n_both / n_avg < 1.10, "pool_type='both' should be nearly free"
         with torch.no_grad():
             assert both(torch.randn(2, 6, 3, 64, 64), None, None).shape == (2, 5)
+
+
+class TestChunkMemory:
+    """The memory property chunking exists for.
+
+    Written after shipping a version that chunked but did NOT checkpoint per
+    chunk, which saves nothing: autograd stores every chunk's activations, so
+    the total is identical to the unchunked pass. These tests assert the actual
+    byte counts so that regression cannot recur silently.
+    """
+
+    @staticmethod
+    def saved_bytes(fn):
+        """Bytes autograd stashes for backward during fn()."""
+        total, seen = [0], set()
+        def pack(t):
+            if t.data_ptr() not in seen:
+                seen.add(t.data_ptr())
+                total[0] += t.numel() * t.element_size()
+            return t
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda t: t):
+            fn().sum()
+        return total[0]
+
+    def test_chunking_alone_saves_nothing(self):
+        """Documents the trap. If this ever starts passing as an inequality,
+        someone has changed autograd's behavior, not fixed the code."""
+        x = torch.randn(4, 16, 3, 64, 64)
+        m = FrontCNN(3, 8, 3).train()
+        unchunked = self.saved_bytes(lambda: m(x))
+        m.chunk_size = 4
+        assert self.saved_bytes(lambda: m(x)) == unchunked
+
+    def test_per_chunk_checkpointing_cuts_saved_bytes(self):
+        x = torch.randn(4, 16, 3, 64, 64)
+        plain = FrontCNN(3, 8, 3).train()
+        ckpt = FrontCNN(3, 8, 3, chunk_size=4, checkpoint_chunks=True).train()
+        assert self.saved_bytes(lambda: ckpt(x)) < self.saved_bytes(lambda: plain(x)) / 5
+
+    def test_saved_bytes_independent_of_chunk_count(self):
+        """Per-chunk checkpointing stores only chunk boundaries, so the retained
+        total must not grow with the number of chunks."""
+        x = torch.randn(4, 16, 3, 64, 64)
+        sizes = []
+        for cs in (16, 8, 4):
+            m = FrontCNN(3, 8, 3, chunk_size=cs, checkpoint_chunks=True).train()
+            sizes.append(self.saved_bytes(lambda: m(x)))
+        assert len(set(sizes)) == 1, f"retained bytes varied with chunk count: {sizes}"
+
+    def test_checkpoint_chunks_requires_chunk_size(self):
+        with pytest.raises(ValueError, match="requires chunk_size"):
+            FrontCNN(3, 8, 3, checkpoint_chunks=True)
+
+    def test_classifier_enables_per_chunk_checkpointing(self):
+        """chunk_size + gradient_checkpointing must reach FrontCNN as per-chunk
+        checkpointing, and the classifier must not then double-wrap it."""
+        m = tiny_model(frontcnn_chunk_size=8, gradient_checkpointing=True)
+        assert m.frontcnn.checkpoint_chunks is True
+        assert tiny_model(frontcnn_chunk_size=8).frontcnn.checkpoint_chunks is False
+        assert tiny_model(gradient_checkpointing=True).frontcnn.checkpoint_chunks is False
+
+    def test_gradients_match_unchunked_in_float64(self):
+        """Chunking changes float32 summation order, not the math. In float64 the
+        gradients agree to ~1e-14, which is what 'exact' means here."""
+        m = FrontCNN(3, 8, 3).train().to(torch.float64)
+        x = torch.randn(4, 8, 3, 32, 32, dtype=torch.float64, requires_grad=True)
+
+        def grads(chunk, ckpt):
+            m.chunk_size, m.checkpoint_chunks = chunk, ckpt
+            x.grad = None
+            for p in m.parameters():
+                p.grad = None
+            m(x).sum().backward()
+            return x.grad.clone(), m.conv_block[0].weight.grad.clone()
+
+        gx0, gw0 = grads(None, False)
+        for chunk, ckpt in [(8, False), (8, True), (3, True)]:
+            gx, gw = grads(chunk, ckpt)
+            assert (gx - gx0).abs().max() < 1e-12
+            assert (gw - gw0).abs().max() / gw0.abs().max() < 1e-12

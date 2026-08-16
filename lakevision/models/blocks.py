@@ -5,6 +5,7 @@ Reusable model blocks for Greenland supraglacial lake drainage classification
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 class FrontCNN(nn.Module):
     """
@@ -32,9 +33,29 @@ class FrontCNN(nn.Module):
             B*T image axis instead of all at once. Every op here is per-image
             (Conv2d/LeakyReLU/MaxPool2d/norm), so with norm != 'batch' this is
             mathematically EXACT — only the cuDNN algorithm choice varies, at the
-            ~1e-6 level. What it buys is peak activation memory independent of
-            batch size: at bs=32, T=153 the first conv otherwise materializes
-            4,896 images at once (~38 GB). None (default) = no chunking.
+            ~1e-6 level. None (default) = no chunking.
+
+            ⚠️ chunk_size ALONE SAVES NO TRAINING MEMORY. Autograd stores every
+            chunk's activations for backward, so the sum is identical to the
+            unchunked pass — measured, not assumed: 29.09 MB saved either way on
+            a B*T=64 probe. It only helps under ``torch.no_grad`` (inference).
+            To make peak memory actually independent of batch size you must ALSO
+            pass checkpoint_chunks=True.
+        checkpoint_chunks (bool): gradient-checkpoint each chunk separately.
+            This is the setting that buys the memory. Checkpointing the whole
+            FrontCNN as one segment does not: the backward pass rebuilds that
+            entire segment at once and pays nearly full peak anyway (the
+            granularity is wrong, not the idea). Per-chunk, backward recomputes
+            one chunk at a time, so peak backward activation is one chunk's worth
+            regardless of batch size:
+
+                strategy                        saved MB   backward peak
+                chunk=16, no ckpt                  29.09   full  (29 MB)
+                no chunk, ckpt whole FrontCNN       3.00   full  (29 MB)
+                chunk=16, ckpt EACH chunk           3.00   1 chunk (7.3 MB)
+
+            Requires chunk_size. Only active in training mode with grad enabled.
+            (default: False)
 
             NOTE for the CV grid: chunk_size is NOT a scientific variable. Fix it
             in config. Two runs differing only in chunk_size diverge into
@@ -70,7 +91,7 @@ class FrontCNN(nn.Module):
     
     """
     def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=None, pool='max',
-                 norm='none', norm_groups=8, chunk_size=None):
+                 norm='none', norm_groups=8, chunk_size=None, checkpoint_chunks=False):
         super(FrontCNN, self).__init__()
 
         if pool not in ['max', 'avg', 'none']:
@@ -80,8 +101,14 @@ class FrontCNN(nn.Module):
         if chunk_size is not None and chunk_size < 1:
             raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
+        if checkpoint_chunks and chunk_size is None:
+            raise ValueError("checkpoint_chunks=True requires chunk_size. Without "
+                             "chunking there is nothing to checkpoint per-chunk; "
+                             "use the caller's own gradient_checkpointing instead.")
+
         self.norm = norm
         self.chunk_size = chunk_size
+        self.checkpoint_chunks = checkpoint_chunks
 
         layers = []
         C_in = in_channels
@@ -115,14 +142,21 @@ class FrontCNN(nn.Module):
         B, T, C, H, W = x.shape
         x = x.reshape(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
 
-        # Chunking keeps peak activation memory independent of batch size. Each
-        # op in conv_block is per-image, so slicing the B*T axis and
+        # Each op in conv_block is per-image, so slicing the B*T axis and
         # concatenating is exact (see the chunk_size note in the class docstring).
+        # The memory win comes from checkpoint_chunks, NOT from chunking alone —
+        # without it autograd still stores every chunk's activations.
         if self.chunk_size is None or self.chunk_size >= x.shape[0]:
             x = self.conv_block(x)
         else:
-            x = torch.cat([self.conv_block(x[i:i + self.chunk_size])
-                           for i in range(0, x.shape[0], self.chunk_size)], dim=0)
+            ckpt = (self.checkpoint_chunks and self.training
+                    and torch.is_grad_enabled())
+            outs = []
+            for i in range(0, x.shape[0], self.chunk_size):
+                sl = x[i:i + self.chunk_size]
+                outs.append(checkpoint(self.conv_block, sl, use_reentrant=False)
+                            if ckpt else self.conv_block(sl))
+            x = torch.cat(outs, dim=0)
         _, C_out, H_conv, W_conv = x.shape
 
         # Conditional pooling. out_hw=None means "keep whatever the conv stack

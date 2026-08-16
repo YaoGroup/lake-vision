@@ -87,11 +87,16 @@ class LakeDrainageClassifier(nn.Module):
                                         regardless of batch size.
         frontcnn_norm_groups    (int): groups for GroupNorm, clamped to channel count (default: 8)
         frontcnn_chunk_size     (int or None): run the conv stack over slices of the B*T image
-                                        axis. Makes peak FrontCNN activation independent of
-                                        batch size (96.8 -> 27.3 GB at bs=32), which is what
-                                        makes bs=32 fit a 40 GB card at all. Exact for
-                                        norm != 'batch'. Set it in config and FIX it — it is
-                                        not a scientific variable. (default: None)
+                                        axis. Exact for norm != 'batch'. Set it in config and
+                                        FIX it — it is not a scientific variable. (default: None)
+
+                                        ⚠️ Chunking alone saves NO training memory (autograd
+                                        stores every chunk's activations anyway). The memory
+                                        win needs gradient_checkpointing=True as well, which
+                                        switches FrontCNN into per-chunk checkpointing and
+                                        makes peak backward activation one chunk's worth
+                                        regardless of batch size. Passing chunk_size without
+                                        gradient_checkpointing buys only inference memory.
         clstm_hidden            (int): hidden channels for CLSTM (default: 32)
         clstm_kernel            (int): kernel size for CLSTM (default: 3)
         clstm_forget_bias       (float): initial forget-gate bias (default: 0.0 = ESSD).
@@ -279,6 +284,13 @@ class LakeDrainageClassifier(nn.Module):
                 norm=frontcnn_norm,
                 norm_groups=frontcnn_norm_groups,
                 chunk_size=frontcnn_chunk_size,
+                # Chunking alone saves nothing during training; per-chunk
+                # checkpointing is what makes peak memory batch-size independent.
+                # When both are on, FrontCNN checkpoints internally and the outer
+                # whole-segment wrap below is skipped (it would be strictly worse:
+                # backward would rebuild every chunk at once).
+                checkpoint_chunks=(gradient_checkpointing
+                                   and frontcnn_chunk_size is not None),
             )
             frontcnn_out_channels = self.frontcnn.output_channels
 
@@ -310,6 +322,8 @@ class LakeDrainageClassifier(nn.Module):
                     norm=frontcnn_norm,
                     norm_groups=frontcnn_norm_groups,
                     chunk_size=frontcnn_chunk_size,
+                    checkpoint_chunks=(gradient_checkpointing
+                                       and frontcnn_chunk_size is not None),
                 )
             else: # no attention
                 self.attention = nn.Identity()
@@ -434,9 +448,12 @@ class LakeDrainageClassifier(nn.Module):
             mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
 
             # process imagery through FrontCNN
-            if self.gradient_checkpointing and self.training:
+            if (self.gradient_checkpointing and self.training
+                    and not self.frontcnn.checkpoint_chunks):
                 img_features = checkpoint(self.frontcnn, imagery, use_reentrant=False)
             else:
+                # Either no checkpointing, or FrontCNN is checkpointing each chunk
+                # itself — wrapping again would defeat the point.
                 img_features = self.frontcnn(imagery)   # [B, T, C, Hf, Wf]
 
             if self.use_vector_lstm:
@@ -455,7 +472,8 @@ class LakeDrainageClassifier(nn.Module):
                 # apply attention
                 if self.attention_type == 'arch':
                     # architectural attention fusion between separate mask pathway and imagery pathway
-                    if self.gradient_checkpointing and self.training:
+                    if (self.gradient_checkpointing and self.training
+                            and not self.frontcnn_mask.checkpoint_chunks):
                         mask_features = checkpoint(self.frontcnn_mask, mask, use_reentrant=False)
                     else:
                         mask_features = self.frontcnn_mask(mask)
