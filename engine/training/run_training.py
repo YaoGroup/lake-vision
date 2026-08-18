@@ -912,6 +912,13 @@ def train(config: dict):
     for epoch in range(epochs):
         epoch_start_time = time.time()
 
+        # Seeded RandomD4 draws are keyed on (seed, epoch, idx); without this
+        # call the epoch stays 0 and every lake keeps a single fixed symmetry
+        # for the whole run. Workers respawn each epoch
+        # (persistent_workers=False), so the updated epoch reaches them.
+        if hasattr(train_dataset, "set_epoch"):
+            train_dataset.set_epoch(epoch)
+
         accumulation_steps = config.get("accumulation_steps", 1)
         amp = config.get("amp", False)
         train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps, amp=amp)
@@ -1166,8 +1173,6 @@ def main():
                         help="Disable class-stratified splitting.")
 
     # Data configuration
-    parser.add_argument("--seq_len", type=int, default=153,
-                        help="Sequence length for temporal window")
     parser.add_argument("--band_stats", type=str, default=None,
                         help="Path to band statistics JSON for normalization")
     parser.add_argument("--cloudy_seq_var", type=str, default="cloudy_seq_rgb",
@@ -1252,6 +1257,11 @@ def main():
     # Translate --no_stratify (action flag) to config["stratify"] so existing
     # code that reads config.get("stratify", True) keeps working.
     config["stratify"] = not config.pop("no_stratify", False)
+
+    # seq_len is pinned to the full melt season (153 frames). Deliberately not
+    # a CLI knob or a CV-grid axis right now; keep the window odd if this ever
+    # changes (the windowing math yields 2*(seq_len//2)+1 frames).
+    config["seq_len"] = 153
 
     # "64,64" -> (64, 64); unset stays None (= keep the conv stack's own output)
     if config.get("frontcnn_out_hw"):
