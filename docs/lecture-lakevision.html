@@ -1,0 +1,1192 @@
+<title>lake-vision: An Onboarding Lecture</title>
+<style>
+  :root {
+    --bg: #f2f6f7;
+    --surface: #ffffff;
+    --ink: #1b2a31;
+    --muted: #5a7079;
+    --line: #d3dfe2;
+    --accent: #0c7d8a;
+    --accent-soft: rgba(12, 125, 138, 0.10);
+    --warm: #a05e1e;
+    --warm-soft: rgba(160, 94, 30, 0.08);
+    --code-bg: #e9f0f1;
+    --serif: Charter, 'Bitstream Charter', Cambria, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e161a;
+      --surface: #151f24;
+      --ink: #d8e4e7;
+      --muted: #8ba3ac;
+      --line: #263840;
+      --accent: #46c0cf;
+      --accent-soft: rgba(70, 192, 207, 0.13);
+      --warm: #d69b57;
+      --warm-soft: rgba(214, 155, 87, 0.10);
+      --code-bg: #101b21;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e161a;
+    --surface: #151f24;
+    --ink: #d8e4e7;
+    --muted: #8ba3ac;
+    --line: #263840;
+    --accent: #46c0cf;
+    --accent-soft: rgba(70, 192, 207, 0.13);
+    --warm: #d69b57;
+    --warm-soft: rgba(214, 155, 87, 0.10);
+    --code-bg: #101b21;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 0;
+    padding: 0 20px 96px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  .prose { max-width: 72ch; }
+
+  header.masthead { max-width: 72ch; margin: 64px auto 12px; }
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--sans);
+    font-size: clamp(30px, 5vw, 42px);
+    font-weight: 750;
+    letter-spacing: -0.015em;
+    line-height: 1.12;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .standfirst { font-size: 19px; color: var(--muted); margin: 0 0 22px; text-wrap: balance; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px; font-family: var(--sans); font-size: 12.5px; }
+  .meta-row span {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 999px;
+    padding: 3px 11px;
+    color: var(--muted);
+  }
+  .meta-row span b { color: var(--ink); font-weight: 600; }
+
+  nav.toc {
+    max-width: 72ch;
+    margin: 36px auto 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 18px 0;
+    font-family: var(--sans);
+    font-size: 14.5px;
+    columns: 2;
+    column-gap: 40px;
+  }
+  nav.toc a { color: var(--ink); text-decoration: none; display: block; padding: 3px 0; }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+  nav.toc .n { color: var(--accent); font-family: var(--mono); font-size: 12.5px; margin-right: 10px; }
+
+  section { margin: 72px auto 0; }
+  h2 {
+    font-family: var(--sans);
+    font-size: 26px;
+    font-weight: 720;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    max-width: 72ch;
+    text-wrap: balance;
+  }
+  h2 .n { color: var(--accent); font-family: var(--mono); font-size: 17px; font-weight: 500; margin-right: 12px; }
+  h3 {
+    font-family: var(--sans);
+    font-size: 18.5px;
+    font-weight: 680;
+    margin: 40px 0 4px;
+    max-width: 72ch;
+  }
+  p, ul, ol { max-width: 72ch; margin: 14px 0; }
+  li { margin: 6px 0; }
+  a { color: var(--accent); }
+  strong { font-weight: 650; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    max-width: 100%;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .shape {
+    font-family: var(--mono);
+    font-size: 0.84em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  figure {
+    margin: 30px 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px 22px 14px;
+    overflow-x: auto;
+  }
+  figure svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  figcaption {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    color: var(--muted);
+    margin-top: 14px;
+    line-height: 1.5;
+    max-width: 78ch;
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  table {
+    border-collapse: collapse;
+    font-family: var(--sans);
+    font-size: 14.5px;
+    margin: 18px 0;
+    width: 100%;
+    max-width: 72ch;
+  }
+  .table-scroll { overflow-x: auto; max-width: 72ch; }
+  th {
+    text-align: left;
+    font-weight: 640;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1.5px solid var(--line);
+    padding: 8px 14px 8px 0;
+  }
+  td { border-bottom: 1px solid var(--line); padding: 8px 14px 8px 0; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td code { font-size: 12.5px; }
+
+  .callout {
+    max-width: 72ch;
+    background: var(--warm-soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 22px 0;
+  }
+  .callout .tag {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--warm);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .callout p { margin: 6px 0; font-size: 15.5px; }
+
+  .note {
+    max-width: 72ch;
+    background: var(--accent-soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 22px 0;
+  }
+  .note .tag {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .note p { margin: 6px 0; font-size: 15.5px; }
+
+  /* SVG shared classes */
+  .sv-box { fill: var(--surface); stroke: var(--ink); stroke-width: 1.2; }
+  .sv-box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+  .sv-box-dash { fill: var(--surface); stroke: var(--muted); stroke-width: 1.1; stroke-dasharray: 5 4; }
+  .sv-label { font-family: var(--sans); font-size: 12.5px; fill: var(--ink); }
+  .sv-label-b { font-family: var(--sans); font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+  .sv-sub { font-family: var(--sans); font-size: 10.5px; fill: var(--muted); }
+  .sv-shape { font-family: var(--mono); font-size: 11px; fill: var(--accent); }
+  .sv-wire { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .sv-wire-dash { stroke: var(--muted); stroke-width: 1.2; fill: none; stroke-dasharray: 5 4; }
+  .sv-wire-accent { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .sv-head { fill: var(--muted); }
+  .sv-head-accent { fill: var(--accent); }
+  .sv-op { fill: var(--surface); stroke: var(--ink); stroke-width: 1.3; }
+  .sv-op-t { font-family: var(--serif); font-size: 14px; fill: var(--ink); }
+  .sv-lake { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+  .sv-tile { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .sv-band { fill: var(--accent-soft); }
+
+  footer {
+    max-width: 72ch;
+    margin: 88px auto 0;
+    border-top: 1px solid var(--line);
+    padding-top: 20px;
+    font-family: var(--sans);
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  @media (max-width: 640px) { nav.toc { columns: 1; } }
+  @media (prefers-reduced-motion: no-preference) {
+    a { transition: color 120ms ease; }
+  }
+</style>
+
+<header class="masthead">
+  <p class="eyebrow">lake-vision · onboarding lecture</p>
+  <h1>Watching Greenland's lakes drain, 153 frames at a time</h1>
+  <p class="standfirst">How this repo turns Sentinel-2 image stacks into a five-way drainage classification —
+  the data workflow, the tensors, and the ConvLSTM at the center of it.</p>
+  <div class="meta-row">
+    <span><b>1,679</b> labeled lakes (CW basin, 2018–2019)</span>
+    <span><b>5</b> classes: ND · HF · MD · LD · CD</span>
+    <span><b>139,925</b> parameters</span>
+    <span>ESSD data DOI <b>10.25740/sf350xp4038</b></span>
+    <span>written 2026-08 · verify against code before trusting</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#s1"><span class="n">01</span>The problem</a>
+  <a href="#s2"><span class="n">02</span>The data workflow</a>
+  <a href="#s3"><span class="n">03</span>From file to tensor</a>
+  <a href="#s4"><span class="n">04</span>The model</a>
+  <a href="#s5"><span class="n">05</span>Training</a>
+  <a href="#s6"><span class="n">06</span>Evaluation &amp; results</a>
+  <a href="#s7"><span class="n">07</span>Repo map</a>
+  <a href="#s8"><span class="n">08</span>Sharp edges</a>
+</nav>
+
+<main>
+
+<section id="s1">
+  <h2><span class="n">01</span>The problem</h2>
+  <div class="prose">
+    <p>Every melt season, thousands of lakes form on the surface of the Greenland Ice Sheet.
+    Some quietly refreeze. Others drain — and <em>how</em> they drain matters: a lake that
+    hydrofractures through a kilometer of ice delivers its water (and a new conduit) to the bed
+    in hours, lubricating ice flow, while a lake that spills laterally into a downstream channel
+    does something entirely different to the system. Classifying drainage style at scale, from
+    satellite record alone, is what this repo is for.</p>
+    <p>The unit of prediction is <strong>one lake, one melt season</strong>. The model sees a
+    summer-long sequence of Sentinel-2 image tiles centered on the lake, plus the lake's water-area
+    time series, and outputs one of five classes:</p>
+  </div>
+  <table>
+    <thead><tr><th>Index</th><th>Code</th><th>Meaning</th><th class="num">Count (combined CW)</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><code>ND</code></td><td>No drainage — fills, persists or refreezes</td><td class="num">236</td></tr>
+      <tr><td>1</td><td><code>HF</code></td><td>Hydrofracture — rapid drainage through a new fracture</td><td class="num">279</td></tr>
+      <tr><td>2</td><td><code>MD</code></td><td>Moulin drainage — drains via an existing moulin</td><td class="num">242</td></tr>
+      <tr><td>3</td><td><code>LD</code></td><td>Lateral drainage — overflows into surface channels</td><td class="num">580</td></tr>
+      <tr><td>4</td><td><code>CD</code></td><td>Crevasse drainage — drains into a crevasse field</td><td class="num">342</td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>The labeled dataset covers the <strong>CW (central-west) IMBIE drainage basin</strong>:
+    679 lakes from 2018 and 1,000 from 2019, hand-labeled in the <code>sat-tile-stack</code> GUI
+    and published as the ESSD data deposit. Labels are strings (<code>ND</code>…<code>CD</code>)
+    in per-year CSVs; the training code maps them to integers 0–4. Note the class imbalance —
+    LD is 2.5× ND — which is why training weights the loss by inverse class frequency.</p>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="n">02</span>The data workflow</h2>
+  <div class="prose">
+    <p>Two repos share the work. <code>sat-tile-stack</code> (a sibling repo) talks to the
+    satellite archive: it queries Sentinel-2 L2A, cuts 512×512 tiles at 10&nbsp;m/px around each
+    lake, and writes one raw NetCDF stack per lake per season. <code>lake-vision</code> (this
+    repo) takes it from there: it fuses those stacks with lake polygons and water-area series
+    from Dunmire et&nbsp;al. (2025) into per-lake <em>composites</em>, trains on them, and runs
+    inference.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 980 402" role="img" aria-label="Data pipeline: Sentinel-2 imagery flows through sat-tile-stack to raw stacks on OAK, then through synthesize_region.py (joined by Dunmire polygons and water area) into per-lake composites; labels flow from the GUI through split_fixed.py into committed splits; composites and splits meet in LakeDataset and run_training.py, producing checkpoints consumed by run_inference.py.">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head"/>
+        </marker>
+        <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head-accent"/>
+        </marker>
+      </defs>
+
+      <!-- tributary: Dunmire -->
+      <rect x="520" y="8" width="216" height="34" rx="5" class="sv-box-dash"/>
+      <text x="628" y="24" text-anchor="middle" class="sv-label">Dunmire et al. 2025</text>
+      <text x="628" y="36" text-anchor="middle" class="sv-sub">lake polygons + S2_water area series</text>
+      <line x1="628" y1="42" x2="628" y2="86" class="sv-wire" marker-end="url(#ah)"/>
+
+      <!-- row A: acquisition -->
+      <rect x="10" y="88" width="112" height="44" rx="5" class="sv-box"/>
+      <text x="66" y="107" text-anchor="middle" class="sv-label-b">Sentinel-2 L2A</text>
+      <text x="66" y="121" text-anchor="middle" class="sv-sub">May–Sep, ~153 passes</text>
+
+      <line x1="122" y1="110" x2="158" y2="110" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="160" y="88" width="118" height="44" rx="5" class="sv-box"/>
+      <text x="219" y="107" text-anchor="middle" class="sv-label-b">sat-tile-stack</text>
+      <text x="219" y="121" text-anchor="middle" class="sv-sub">tile + stack per lake</text>
+
+      <line x1="278" y1="110" x2="314" y2="110" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="316" y="88" width="150" height="44" rx="5" class="sv-box"/>
+      <text x="391" y="107" text-anchor="middle" class="sv-label-b">stacks_v2/ on OAK</text>
+      <text x="391" y="121" text-anchor="middle" class="sv-sub">canonical = ESSD deposit</text>
+      <text x="391" y="150" text-anchor="middle" class="sv-shape">reflectance [T,6,512,512] + masks</text>
+
+      <line x1="466" y1="110" x2="518" y2="110" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="520" y="88" width="216" height="44" rx="5" class="sv-box"/>
+      <text x="628" y="107" text-anchor="middle" class="sv-label-b">synthesize_region.py</text>
+      <text x="628" y="121" text-anchor="middle" class="sv-sub">fuse imagery · mask · area · label attrs</text>
+
+      <line x1="736" y1="110" x2="788" y2="110" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="790" y="88" width="180" height="44" rx="5" class="sv-box-accent"/>
+      <text x="880" y="107" text-anchor="middle" class="sv-label-b">composites</text>
+      <text x="880" y="121" text-anchor="middle" class="sv-sub">one .nc per lake-season</text>
+      <text x="880" y="150" text-anchor="middle" class="sv-shape">imagery [153,4,512,512]</text>
+      <text x="880" y="164" text-anchor="middle" class="sv-shape">water_area [153]</text>
+
+      <!-- row B: labels -->
+      <rect x="10" y="212" width="150" height="44" rx="5" class="sv-box"/>
+      <text x="85" y="231" text-anchor="middle" class="sv-label-b">labeling GUI</text>
+      <text x="85" y="245" text-anchor="middle" class="sv-sub">in sat-tile-stack</text>
+
+      <line x1="160" y1="234" x2="212" y2="234" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="214" y="212" width="176" height="44" rx="5" class="sv-box"/>
+      <text x="302" y="231" text-anchor="middle" class="sv-label-b">labels_CW_{year}.csv</text>
+      <text x="302" y="245" text-anchor="middle" class="sv-sub">lake_id → ND/HF/MD/LD/CD</text>
+
+      <line x1="390" y1="234" x2="442" y2="234" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="444" y="212" width="140" height="44" rx="5" class="sv-box"/>
+      <text x="514" y="231" text-anchor="middle" class="sv-label-b">split_fixed.py</text>
+      <text x="514" y="245" text-anchor="middle" class="sv-sub">seeded, stratified, nested</text>
+
+      <line x1="584" y1="234" x2="636" y2="234" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="638" y="212" width="170" height="44" rx="5" class="sv-box"/>
+      <text x="723" y="231" text-anchor="middle" class="sv-label-b">splits/*.json</text>
+      <text x="723" y="245" text-anchor="middle" class="sv-sub">committed to the repo</text>
+
+      <!-- row C: train/infer -->
+      <rect x="10" y="330" width="200" height="44" rx="5" class="sv-box"/>
+      <text x="110" y="349" text-anchor="middle" class="sv-label-b">LakeDataset + DataLoader</text>
+      <text x="110" y="363" text-anchor="middle" class="sv-sub">window · normalize · augment</text>
+
+      <line x1="210" y1="352" x2="256" y2="352" class="sv-wire-accent" marker-end="url(#ah2)"/>
+
+      <rect x="258" y="330" width="150" height="44" rx="5" class="sv-box-accent"/>
+      <text x="333" y="349" text-anchor="middle" class="sv-label-b">run_training.py</text>
+      <text x="333" y="363" text-anchor="middle" class="sv-sub">Adam · bf16 · 400 epochs</text>
+
+      <line x1="408" y1="352" x2="460" y2="352" class="sv-wire" marker-end="url(#ah)"/>
+      <text x="434" y="345" text-anchor="middle" class="sv-sub">state_dict</text>
+
+      <rect x="462" y="330" width="152" height="44" rx="5" class="sv-box"/>
+      <text x="538" y="349" text-anchor="middle" class="sv-label-b">checkpoints .pth</text>
+      <text x="538" y="363" text-anchor="middle" class="sv-sub">best-loss · best-F1 · periodic</text>
+
+      <line x1="614" y1="352" x2="666" y2="352" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="668" y="330" width="146" height="44" rx="5" class="sv-box"/>
+      <text x="741" y="349" text-anchor="middle" class="sv-label-b">run_inference.py</text>
+      <text x="741" y="363" text-anchor="middle" class="sv-sub">resumable, per-lake</text>
+
+      <line x1="814" y1="352" x2="866" y2="352" class="sv-wire" marker-end="url(#ah)"/>
+
+      <rect x="868" y="330" width="102" height="44" rx="5" class="sv-box"/>
+      <text x="919" y="349" text-anchor="middle" class="sv-label-b">predictions</text>
+      <text x="919" y="363" text-anchor="middle" class="sv-sub">CSV + probs</text>
+
+      <!-- elbows: composites -> LakeDataset ; splits -> run_training -->
+      <polyline points="880,168 880,308 60,308 60,328" class="sv-wire-accent" marker-end="url(#ah2)"/>
+      <text x="520" y="322" text-anchor="middle" class="sv-sub">per-lake .nc, read every epoch</text>
+      <polyline points="723,256 723,290 333,290 333,328" class="sv-wire" marker-end="url(#ah)"/>
+      <text x="352" y="284" class="sv-sub">train / val / test lake_ids</text>
+    </svg>
+    <figcaption><b>Figure 1 — the end-to-end workflow.</b> Imagery flows left to right along the top;
+    labels flow through the middle; training and inference run along the bottom. The teal path is the
+    hot path: composites are re-read from disk every epoch, which is why the dataloader — not the GPU —
+    dominates wall-clock time (§05).</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>The composite file</h3>
+    <p>A composite is one lake-season in one self-contained NetCDF file, named
+    <code>{lake_id}.nc</code> (e.g. <code>CW2019_1579.nc</code>). The schema, from an actual file:</p>
+  </div>
+  <pre><code>dimensions:   time = 153,  channel = 4,  y = 512,  x = 512
+variables:
+  imagery     float32  (time, channel, y, x)   # channel = [red, green, blue, mask]
+                                               # reflectance in raw DN (÷10000 ≈ [0,1]); NaN where no data
+  water_area  float64  (time,)                 # fraction of lake polygon that is water, 0–1
+                                               # from Dunmire S2_water, ffill/bfill-filled
+  time        int64    (time,)                 # observation timestamps
+attributes:   lake_id, year, description, source_imagery</code></pre>
+  <div class="prose">
+    <p>Newer stacks in the canonical <code>stacks_v2</code> deposit carry more: 6-band
+    <code>reflectance</code> (adds NIR + two SWIR), a static <code>lake_boundary</code> polygon mask,
+    a dynamic <code>water_mask_ndwi</code>, and <code>p_water</code>. <code>LakeDataset</code>
+    auto-detects both formats. What the deposit still lacks is the <code>cloudy_seq_*</code>
+    per-frame usefulness flag (see <code>docs/CV_GRID.md</code> for the plan to add it).</p>
+
+    <h3>Splits are files, not code</h3>
+    <p>Train/val/test membership is <em>not</em> recomputed per run. <code>engine/training/split_fixed.py</code>
+    generated them once — seeded (42), class-stratified, with the train list ordered so that every prefix
+    <code>train_ids[:N]</code> is itself stratified (that's what makes the learning-curve runs nested) —
+    and the resulting JSON files are committed under <code>splits/</code>:</p>
+  </div>
+  <table>
+    <thead><tr><th>Split</th><th class="num">Train</th><th class="num">Val</th><th class="num">Test</th><th>Design</th></tr></thead>
+    <tbody>
+      <tr><td><code>splits/essd_CW/</code></td><td class="num">1,175</td><td class="num">336</td><td class="num">168</td><td>2018+2019 combined, 70/20/10</td></tr>
+      <tr><td><code>splits/essd_CW_crossyear/</code></td><td class="num">800</td><td class="num">200</td><td class="num">679</td><td>train+val on 2019, test = all of 2018</td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>The cross-year split is the honest one: it asks whether a model trained on one season
+    generalizes to another. The combined split is easier — and note that because lake IDs are
+    per-year (<code>CW2018_*</code> vs <code>CW2019_*</code>), the same physical lake can appear
+    in train (as its 2018 self) and test (as its 2019 self). Keep that in mind when comparing the
+    two baselines' numbers.</p>
+  </div>
+</section>
+
+<section id="s3">
+  <h2><span class="n">03</span>From file to tensor</h2>
+  <div class="prose">
+    <p><code>lakevision/data/datasets.py::LakeDataset</code> is where a NetCDF file becomes model
+    input. Per sample (<code>__getitem__</code>), it returns five things:
+    <span class="shape">img_seq [T,C,H,W]</span>, <span class="shape">area_seq [T,1]</span>,
+    <span class="shape">cloudy_seq [T,1]</span>, an integer label, and the <code>lake_id</code> string.
+    Four transformations happen on the way:</p>
+    <p><strong>1. Channel selection.</strong> Only the requested channels are read — a hyperslab
+    read per channel index, so unrequested bands are never decompressed. Both file formats are
+    auto-detected: composite <code>imagery</code> with a string channel coordinate, and SDR
+    <code>reflectance</code> whose band names live in the <code>band_name</code> char array
+    (B04/B03/B02/B08/B11/B12 → red/green/blue/nir/swir16/swir22). The baseline loads
+    <code>[red, green, blue, mask]</code>. Band flags on the dataset must match the flags on the
+    model; nothing asserts this on <code>main</code> (a channel-count assert exists only on
+    <code>feature/cache-data</code>).</p>
+    <p><strong>2. Temporal windowing.</strong> The sequence is cut to <code>seq_len=153</code>
+    frames <em>centered on the water-area peak</em> — the argmax of a NaN-filled copy of
+    <code>water_area</code> — clamped at the season's edges. Since composites are exactly 153
+    frames long, the window is currently the whole series; the machinery matters when
+    <code>seq_len</code> shrinks or stacks lengthen.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 920 240" role="img" aria-label="Schematic water-area curve across a melt season with the seq_len window centered on the argmax peak and clamped to the series edges.">
+      <defs>
+        <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head"/>
+        </marker>
+      </defs>
+      <!-- window band -->
+      <rect x="330" y="40" width="360" height="150" class="sv-band"/>
+      <line x1="330" y1="40" x2="330" y2="190" class="sv-wire-accent"/>
+      <line x1="690" y1="40" x2="690" y2="190" class="sv-wire-accent"/>
+      <!-- axes -->
+      <line x1="60" y1="190" x2="880" y2="190" class="sv-wire" marker-end="url(#ah3)"/>
+      <line x1="60" y1="190" x2="60" y2="40" class="sv-wire" marker-end="url(#ah3)"/>
+      <text x="874" y="208" text-anchor="end" class="sv-sub">time (raw frames, May → Sep)</text>
+      <text x="56" y="34" text-anchor="start" class="sv-sub">water_area(t)</text>
+      <!-- schematic curve -->
+      <polyline points="60,182 120,180 170,176 220,168 270,160 320,140 370,118 420,96 470,80 510,72 540,88 560,130 580,168 620,176 670,178 720,180 780,181 840,182"
+                class="sv-wire" style="stroke: var(--ink); stroke-width: 1.8;"/>
+      <!-- peak -->
+      <circle cx="510" cy="72" r="4.5" style="fill: var(--accent);"/>
+      <line x1="510" y1="72" x2="510" y2="190" class="sv-wire-dash"/>
+      <text x="510" y="62" text-anchor="middle" class="sv-label-b">argmax(water_area)</text>
+      <!-- window annotation -->
+      <line x1="330" y1="216" x2="690" y2="216" class="sv-wire-accent" marker-start="url(#ah3)" marker-end="url(#ah3)"/>
+      <text x="510" y="232" text-anchor="middle" class="sv-shape">seq_len = 153 frames, centered on the peak, clamped at edges</text>
+    </svg>
+    <figcaption><b>Figure 2 — temporal windowing.</b> The window centers on peak water area so the
+    drainage event (the collapse after the peak) lands inside the sequence. The argmax is computed on
+    a NaN→0 copy; the returned <code>area_seq</code> itself is guarded at load — a composite
+    <code>water_area</code> with any NaN raises (composites are written NaN-filled), and SDR
+    <code>p_water</code> (NaN on unusable days by design) is ffill/bfill-filled, raising only if a
+    whole season is NaN.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p><strong>3. Normalization.</strong> Imagery: reflectance channels are divided by 10,000 and
+    clipped to [0,1]; the mask channel is passed through untouched; NaNs become 0. (A per-band
+    mean/std path exists behind <code>band_stats</code>, but no stats file has ever been computed —
+    it's a planned CV-grid axis, not a used feature.) Area: min-max normalized <em>per sample</em>,
+    so every lake's curve spans exactly [0,1] regardless of lake size. Inference must mirror both
+    normalizations exactly; <code>run_inference.py</code> and <code>predict_lakes.py</code> do, as
+    of August 2026 (§08).</p>
+    <p><strong>4. Augmentation (train only, opt-in).</strong> Satellite tiles have no canonical
+    orientation, so the natural augmentation group is D4 — the 8 symmetries of a square — applied
+    identically to every frame so temporal coherence survives:</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 920 268" role="img" aria-label="The eight D4 symmetries of a square tile containing an asymmetric lake blob: identity and three rotations on the top row; horizontal flip, vertical flip, and two rotation-plus-flip combinations on the bottom row.">
+      <!-- tile template: 72x72; blob path drawn in tile-local coords -->
+      <g transform="translate(96,22)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/>
+      </g>
+      <text x="132" y="112" text-anchor="middle" class="sv-sub">identity</text>
+
+      <g transform="translate(306,22)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="rotate(90,36,36)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="342" y="112" text-anchor="middle" class="sv-sub">rot90</text>
+
+      <g transform="translate(516,22)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="rotate(180,36,36)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="552" y="112" text-anchor="middle" class="sv-sub">rot180</text>
+
+      <g transform="translate(726,22)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="rotate(270,36,36)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="762" y="112" text-anchor="middle" class="sv-sub">rot270</text>
+
+      <g transform="translate(96,140)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="translate(72,0) scale(-1,1)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="132" y="230" text-anchor="middle" class="sv-sub">flip_h</text>
+
+      <g transform="translate(306,140)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="translate(0,72) scale(1,-1)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="342" y="230" text-anchor="middle" class="sv-sub">flip_v</text>
+
+      <g transform="translate(516,140)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="translate(72,0) scale(-1,1) rotate(90,36,36)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="552" y="230" text-anchor="middle" class="sv-sub">rot90 + flip_h</text>
+
+      <g transform="translate(726,140)">
+        <rect width="72" height="72" rx="4" class="sv-tile"/>
+        <g transform="translate(72,0) scale(-1,1) rotate(270,36,36)"><path d="M16,56 L16,24 Q16,15 25,15 L36,15 Q44,15 44,23 L44,33 L54,33 Q61,33 61,40 L61,56 Z" class="sv-lake"/></g>
+      </g>
+      <text x="762" y="230" text-anchor="middle" class="sv-sub">rot270 + flip_h</text>
+
+      <text x="460" y="258" text-anchor="middle" class="sv-sub">one symmetry is applied to all 153 frames of a sample — never per-frame</text>
+    </svg>
+    <figcaption><b>Figure 3 — D4 augmentation.</b> Two modes in <code>lakevision/data/transforms.py</code>:
+    <code>expand</code> deterministically multiplies the dataset ×8 (what the ESSD augmented runs used —
+    and 8× the disk reads), and <code>random</code> picks one symmetry per sample per epoch at 1× the I/O
+    (<code>run_training.py</code> advances the seeded draw each epoch via <code>set_epoch</code>).</figcaption>
+  </figure>
+
+  <div class="prose">
+    <h3>Why the dataloader is the whole performance story</h3>
+    <p>One sample is <span class="shape">153 × 4 × 512 × 512 × float32</span> ≈ <strong>640&nbsp;MB</strong>.
+    The DataLoader queue holds <code>workers × prefetch × batch_size</code> samples, so 12 workers ×
+    2 prefetch × batch 8 is already ~123&nbsp;GB of host RAM in flight. <code>--host_mem_budget_gb</code>
+    (via <code>lakevision/data/loader_plan.py</code>) sizes workers against your SLURM
+    <code>--mem</code> instead of guessing; <code>persistent_workers</code> is deliberately off so
+    train and val workers never coexist. Measured on Sherlock at N=1,175: <strong>~14.5 min/epoch,
+    ~99% of it in the dataloader</strong> — decompressing zlib float32 NetCDF is the pipeline's true
+    bottleneck, and the reason a caching rewrite lives on <code>feature/cache-data</code>.</p>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="n">04</span>The model</h2>
+  <div class="prose">
+    <p><code>lakevision/models/classifier.py::LakeDrainageClassifier</code> is a small multi-stream
+    network — <strong>139,925 parameters</strong>, deliberately modest for a few thousand training
+    samples. Each input stream is reduced to a fixed-length feature vector; the vectors are
+    concatenated and classified by a tiny MLP. Everything below shows the baseline configuration
+    (RGB + mask, area stream on, cloudy stream off, attention off).</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 980 632" role="img" aria-label="Full architecture: the image sequence is split into imagery and mask channels; imagery passes through FrontCNN, optional attention, and a ConvLSTM whose last hidden state is average-pooled to a 32-vector; the area sequence passes through a 16-unit scalar LSTM; the optional cloudy sequence mirrors it; all features concatenate to 48 dimensions and a small MLP produces 5 logits. Tensor shapes are annotated at every stage.">
+      <defs>
+        <marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head"/>
+        </marker>
+        <marker id="ah5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head-accent"/>
+        </marker>
+      </defs>
+
+      <!-- lane label -->
+      <text x="16" y="40" class="sv-label-b" style="font-size:11.5px; letter-spacing:0.08em; text-transform:uppercase; fill:var(--muted);">image stream</text>
+
+      <!-- image lane -->
+      <rect x="16" y="56" width="112" height="46" rx="5" class="sv-box"/>
+      <text x="72" y="76" text-anchor="middle" class="sv-label-b">img_seq</text>
+      <text x="72" y="90" text-anchor="middle" class="sv-sub">from LakeDataset</text>
+      <text x="72" y="118" text-anchor="middle" class="sv-shape">[B,T,4,512,512]</text>
+
+      <line x1="128" y1="79" x2="166" y2="79" class="sv-wire" marker-end="url(#ah4)"/>
+
+      <rect x="168" y="56" width="96" height="46" rx="5" class="sv-box"/>
+      <text x="216" y="76" text-anchor="middle" class="sv-label-b">split</text>
+      <text x="216" y="90" text-anchor="middle" class="sv-sub">imagery | mask</text>
+
+      <line x1="264" y1="79" x2="306" y2="79" class="sv-wire" marker-end="url(#ah4)"/>
+      <text x="285" y="66" text-anchor="middle" class="sv-shape" style="font-size:10px;">3 ch</text>
+
+      <rect x="308" y="56" width="122" height="46" rx="5" class="sv-box-accent"/>
+      <text x="369" y="76" text-anchor="middle" class="sv-label-b">FrontCNN</text>
+      <text x="369" y="90" text-anchor="middle" class="sv-sub">4× (conv·LReLU·pool)</text>
+      <text x="369" y="118" text-anchor="middle" class="sv-shape">→ [B,T,64,32,32]</text>
+
+      <line x1="430" y1="79" x2="472" y2="79" class="sv-wire" marker-end="url(#ah4)"/>
+
+      <rect x="474" y="56" width="104" height="46" rx="5" class="sv-box-dash"/>
+      <text x="526" y="76" text-anchor="middle" class="sv-label">CBAM attn</text>
+      <text x="526" y="90" text-anchor="middle" class="sv-sub">optional · off</text>
+      <text x="526" y="118" text-anchor="middle" class="sv-sub">shape-preserving</text>
+
+      <line x1="578" y1="79" x2="620" y2="79" class="sv-wire" marker-end="url(#ah4)"/>
+
+      <rect x="622" y="56" width="118" height="46" rx="5" class="sv-box-accent"/>
+      <text x="681" y="76" text-anchor="middle" class="sv-label-b">ConvLSTM</text>
+      <text x="681" y="90" text-anchor="middle" class="sv-sub">hidden = 32 ch</text>
+      <text x="681" y="118" text-anchor="middle" class="sv-shape">→ [B,T,32,32,32]</text>
+
+      <line x1="740" y1="79" x2="782" y2="79" class="sv-wire" marker-end="url(#ah4)"/>
+
+      <rect x="784" y="56" width="132" height="46" rx="5" class="sv-box"/>
+      <text x="850" y="72" text-anchor="middle" class="sv-label-b">last t → avg pool</text>
+      <text x="850" y="86" text-anchor="middle" class="sv-sub">[B,32,32,32] → mean</text>
+      <text x="850" y="98" text-anchor="middle" class="sv-sub">over 32×32</text>
+      <text x="850" y="118" text-anchor="middle" class="sv-shape">→ [B,32]</text>
+
+      <line x1="916" y1="79" x2="939" y2="79" class="sv-wire-accent" marker-end="url(#ah5)"/>
+
+      <!-- mask branch -->
+      <polyline points="216,102 216,168 306,168" class="sv-wire-dash" marker-end="url(#ah4)"/>
+      <rect x="308" y="146" width="240" height="44" rx="5" class="sv-box-dash"/>
+      <text x="428" y="164" text-anchor="middle" class="sv-label">mask <tspan class="sv-shape">[B,T,1,512,512]</tspan></text>
+      <text x="428" y="180" text-anchor="middle" class="sv-sub">used only by attention_type='arch' — otherwise discarded</text>
+
+      <!-- area lane -->
+      <text x="16" y="266" class="sv-label-b" style="font-size:11.5px; letter-spacing:0.08em; text-transform:uppercase; fill:var(--muted);">area stream</text>
+      <rect x="16" y="282" width="112" height="46" rx="5" class="sv-box"/>
+      <text x="72" y="302" text-anchor="middle" class="sv-label-b">area_seq</text>
+      <text x="72" y="316" text-anchor="middle" class="sv-sub">min-maxed [0,1]</text>
+      <text x="72" y="344" text-anchor="middle" class="sv-shape">[B,T,1]</text>
+
+      <line x1="128" y1="305" x2="306" y2="305" class="sv-wire" marker-end="url(#ah4)"/>
+
+      <rect x="308" y="282" width="170" height="46" rx="5" class="sv-box-accent"/>
+      <text x="393" y="302" text-anchor="middle" class="sv-label-b">ScalarLSTM</text>
+      <text x="393" y="316" text-anchor="middle" class="sv-sub">hidden = 16, take last t</text>
+      <text x="393" y="344" text-anchor="middle" class="sv-shape">→ [B,16]</text>
+
+      <line x1="478" y1="305" x2="939" y2="305" class="sv-wire-accent" marker-end="url(#ah5)"/>
+
+      <!-- cloudy lane -->
+      <text x="16" y="416" class="sv-label-b" style="font-size:11.5px; letter-spacing:0.08em; text-transform:uppercase; fill:var(--muted);">cloudy stream · off in baseline</text>
+      <rect x="16" y="432" width="112" height="46" rx="5" class="sv-box-dash"/>
+      <text x="72" y="452" text-anchor="middle" class="sv-label">cloudy_seq</text>
+      <text x="72" y="466" text-anchor="middle" class="sv-sub">1 = useful frame</text>
+      <text x="72" y="494" text-anchor="middle" class="sv-shape">[B,T,1]</text>
+
+      <line x1="128" y1="455" x2="306" y2="455" class="sv-wire-dash" marker-end="url(#ah4)"/>
+
+      <rect x="308" y="432" width="170" height="46" rx="5" class="sv-box-dash"/>
+      <text x="393" y="452" text-anchor="middle" class="sv-label">ScalarLSTM</text>
+      <text x="393" y="466" text-anchor="middle" class="sv-sub">hidden = 16, take last t</text>
+      <text x="393" y="494" text-anchor="middle" class="sv-shape">→ [B,16]</text>
+
+      <line x1="478" y1="455" x2="939" y2="455" class="sv-wire-dash" marker-end="url(#ah4)"/>
+
+      <!-- concat bar -->
+      <rect x="941" y="56" width="30" height="422" rx="5" class="sv-box-accent"/>
+      <text x="956" y="270" text-anchor="middle" class="sv-label-b" transform="rotate(-90,956,270)">concat</text>
+
+      <!-- down to MLP -->
+      <polyline points="956,478 956,500 828,500 828,520" class="sv-wire-accent" marker-end="url(#ah5)"/>
+      <text x="944" y="496" text-anchor="end" class="sv-shape">[B,48]</text>
+
+      <rect x="700" y="522" width="256" height="48" rx="5" class="sv-box-accent"/>
+      <text x="828" y="542" text-anchor="middle" class="sv-label-b">ClassHeadMLP</text>
+      <text x="828" y="558" text-anchor="middle" class="sv-sub">48 → 64 → ReLU → dropout 0.3 → 5</text>
+
+      <line x1="828" y1="570" x2="828" y2="602" class="sv-wire-accent" marker-end="url(#ah5)"/>
+      <text x="828" y="622" text-anchor="middle" class="sv-shape">logits [B,5] — softmax applied downstream</text>
+    </svg>
+    <figcaption><b>Figure 4 — the full architecture, baseline configuration.</b> Solid boxes are active
+    in the ESSD baseline; dashed boxes are configuration options that are off. Each stream ends in a flat
+    vector; the concatenation is only 48-dimensional. Note the mask's fate: it is carried through the
+    dataset as channel 4, split off in <code>forward()</code>, and then — with attention off — never used.</figcaption>
+  </figure>
+
+  <h3>4.1 FrontCNN — per-frame spatial encoder</h3>
+  <div class="prose">
+    <p>The FrontCNN (<code>lakevision/models/blocks.py</code>) is a plain 4-layer conv stack with no
+    normalization layers, no residuals — each layer is <code>Conv2d(3×3) → LeakyReLU → MaxPool(2)</code>.
+    It treats time as batch: the input <span class="shape">[B,T,3,512,512]</span> is reshaped to
+    <span class="shape">[B·T,3,512,512]</span>, every frame is encoded independently by the same weights,
+    then reshaped back. All temporal reasoning is deferred to the ConvLSTM.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 920 322" role="img" aria-label="FrontCNN downsampling ladder: five feature maps shrinking from 512 by 512 with 3 channels through four conv-pool layers to 32 by 32 with 64 channels; spatial size halves and channel count doubles at each step.">
+      <defs>
+        <marker id="ah6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head"/>
+        </marker>
+      </defs>
+      <text x="20" y="30" class="sv-sub">applied to every frame independently: [B,T,3,512,512] → view → [B·T,3,512,512]</text>
+
+      <rect x="20" y="84" width="176" height="176" rx="4" class="sv-box-accent"/>
+      <text x="108" y="166" text-anchor="middle" class="sv-label-b">512×512</text>
+      <text x="108" y="184" text-anchor="middle" class="sv-shape">3 ch</text>
+
+      <line x1="196" y1="172" x2="252" y2="172" class="sv-wire" marker-end="url(#ah6)"/>
+      <text x="224" y="150" text-anchor="middle" class="sv-sub">conv 3×3</text>
+      <text x="224" y="162" text-anchor="middle" class="sv-sub">pool ÷2</text>
+
+      <rect x="254" y="114" width="116" height="116" rx="4" class="sv-box-accent"/>
+      <text x="312" y="166" text-anchor="middle" class="sv-label-b">256×256</text>
+      <text x="312" y="184" text-anchor="middle" class="sv-shape">8 ch</text>
+
+      <line x1="370" y1="172" x2="426" y2="172" class="sv-wire" marker-end="url(#ah6)"/>
+      <text x="398" y="150" text-anchor="middle" class="sv-sub">conv 3×3</text>
+      <text x="398" y="162" text-anchor="middle" class="sv-sub">pool ÷2</text>
+
+      <rect x="428" y="132" width="80" height="80" rx="4" class="sv-box-accent"/>
+      <text x="468" y="166" text-anchor="middle" class="sv-label-b">128×128</text>
+      <text x="468" y="184" text-anchor="middle" class="sv-shape">16 ch</text>
+
+      <line x1="508" y1="172" x2="564" y2="172" class="sv-wire" marker-end="url(#ah6)"/>
+      <text x="536" y="150" text-anchor="middle" class="sv-sub">conv 3×3</text>
+      <text x="536" y="162" text-anchor="middle" class="sv-sub">pool ÷2</text>
+
+      <rect x="566" y="144" width="56" height="56" rx="4" class="sv-box-accent"/>
+      <text x="594" y="166" text-anchor="middle" class="sv-label-b">64×64</text>
+      <text x="594" y="184" text-anchor="middle" class="sv-shape">32 ch</text>
+
+      <line x1="622" y1="172" x2="678" y2="172" class="sv-wire" marker-end="url(#ah6)"/>
+      <text x="650" y="150" text-anchor="middle" class="sv-sub">conv 3×3</text>
+      <text x="650" y="162" text-anchor="middle" class="sv-sub">pool ÷2</text>
+
+      <rect x="680" y="152" width="40" height="40" rx="4" class="sv-box-accent"/>
+      <text x="700" y="169" text-anchor="middle" class="sv-label-b" style="font-size:10.5px;">32×32</text>
+      <text x="700" y="183" text-anchor="middle" class="sv-shape" style="font-size:10px;">64 ch</text>
+
+      <line x1="720" y1="172" x2="776" y2="172" class="sv-wire" marker-end="url(#ah6)"/>
+      <text x="828" y="168" text-anchor="middle" class="sv-label-b">to ConvLSTM</text>
+      <text x="828" y="184" text-anchor="middle" class="sv-shape">[B,T,64,32,32]</text>
+
+      <text x="20" y="300" class="sv-sub">spatial area shrinks ×4 per layer while channels double — a 512²·3 frame becomes a 32²·64 feature map (boxes not to scale).</text>
+      <text x="20" y="316" class="sv-sub">out_hw=None keeps this natural 32×32. The ESSD-era code instead upsampled to 64×64 by default — see the reproducibility note in §05.</text>
+    </svg>
+    <figcaption><b>Figure 5 — the FrontCNN ladder.</b> Four identical stages: channels 3→8→16→32→64
+    while resolution falls 512→32. At 10&nbsp;m/px input, one cell of the final 32×32 map summarizes a
+    160&nbsp;m×160&nbsp;m patch — coarse enough to be compact, fine enough that "where in the tile
+    did the water go" survives into the recurrent stage.</figcaption>
+  </figure>
+
+  <h3>4.2 ConvLSTM — spatiotemporal memory</h3>
+  <div class="prose">
+    <p>The heart of the model (<code>lakevision/models/clstm.py</code>, after Shi et&nbsp;al. 2015).
+    A standard LSTM would flatten each frame to a vector and lose all spatial structure; a ConvLSTM
+    keeps hidden state and cell state as <em>feature maps</em> — here
+    <span class="shape">[B,32,32,32]</span> — and replaces every matrix multiply with a 3×3
+    convolution. The gates are computed by <strong>one</strong> convolution on the concatenation of
+    the current input and the previous hidden state, producing all four gates at once:</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 960 486" role="img" aria-label="ConvLSTM cell: x_t and h_(t-1) are concatenated and passed through a single 3 by 3 convolution producing four gate maps f, i, g, o; the cell state travels along a top rail where it is multiplied by the forget gate and added to the product of input and candidate gates; the output gate modulates tanh of the new cell state to produce h_t; dashed arrows show recurrence to the next timestep.">
+      <defs>
+        <marker id="ah7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="sv-head"/>
+        </marker>
+      </defs>
+
+      <!-- cell state rail -->
+      <rect x="26" y="44" width="112" height="42" rx="5" class="sv-box"/>
+      <text x="82" y="62" text-anchor="middle" class="sv-label-b">c_{t−1}</text>
+      <text x="82" y="77" text-anchor="middle" class="sv-shape" style="font-size:10px;">[B,32,32,32]</text>
+
+      <line x1="138" y1="65" x2="386" y2="65" class="sv-wire" marker-end="url(#ah7)"/>
+      <circle cx="402" cy="65" r="15" class="sv-op"/>
+      <text x="402" y="70" text-anchor="middle" class="sv-op-t">⊙</text>
+      <line x1="417" y1="65" x2="546" y2="65" class="sv-wire" marker-end="url(#ah7)"/>
+      <circle cx="562" cy="65" r="15" class="sv-op"/>
+      <text x="562" y="70" text-anchor="middle" class="sv-op-t">+</text>
+      <line x1="577" y1="65" x2="818" y2="65" class="sv-wire" marker-end="url(#ah7)"/>
+
+      <rect x="820" y="44" width="112" height="42" rx="5" class="sv-box-accent"/>
+      <text x="876" y="62" text-anchor="middle" class="sv-label-b">c_t</text>
+      <text x="876" y="77" text-anchor="middle" class="sv-shape" style="font-size:10px;">[B,32,32,32]</text>
+
+      <!-- recurrence for c -->
+      <polyline points="876,44 876,20 82,20 82,42" class="sv-wire-dash" marker-end="url(#ah7)"/>
+      <text x="480" y="14" text-anchor="middle" class="sv-sub">next timestep</text>
+
+      <!-- inputs -->
+      <rect x="26" y="238" width="112" height="42" rx="5" class="sv-box"/>
+      <text x="82" y="256" text-anchor="middle" class="sv-label-b">x_t</text>
+      <text x="82" y="271" text-anchor="middle" class="sv-shape" style="font-size:10px;">[B,64,32,32]</text>
+
+      <rect x="26" y="318" width="112" height="42" rx="5" class="sv-box"/>
+      <text x="82" y="336" text-anchor="middle" class="sv-label-b">h_{t−1}</text>
+      <text x="82" y="351" text-anchor="middle" class="sv-shape" style="font-size:10px;">[B,32,32,32]</text>
+
+      <line x1="138" y1="259" x2="170" y2="259" class="sv-wire" marker-end="url(#ah7)"/>
+      <polyline points="138,339 200,339 200,301" class="sv-wire" marker-end="url(#ah7)"/>
+
+      <rect x="172" y="253" width="96" height="46" rx="5" class="sv-box"/>
+      <text x="220" y="273" text-anchor="middle" class="sv-label-b">concat</text>
+      <text x="220" y="288" text-anchor="middle" class="sv-shape" style="font-size:10px;">96 ch</text>
+
+      <line x1="268" y1="276" x2="310" y2="276" class="sv-wire" marker-end="url(#ah7)"/>
+
+      <rect x="312" y="253" width="140" height="46" rx="5" class="sv-box-accent"/>
+      <text x="382" y="272" text-anchor="middle" class="sv-label-b">conv 3×3</text>
+      <text x="382" y="288" text-anchor="middle" class="sv-shape" style="font-size:10px;">96 → 128 ch (4 gates)</text>
+
+      <!-- fan out to gates -->
+      <polyline points="452,276 486,276 486,150 508,150" class="sv-wire" marker-end="url(#ah7)"/>
+      <polyline points="452,276 486,276 486,232 508,232" class="sv-wire" marker-end="url(#ah7)"/>
+      <polyline points="452,276 486,276 486,314 508,314" class="sv-wire" marker-end="url(#ah7)"/>
+      <polyline points="452,276 486,276 486,396 508,396" class="sv-wire" marker-end="url(#ah7)"/>
+
+      <rect x="510" y="128" width="92" height="42" rx="5" class="sv-box"/>
+      <text x="556" y="146" text-anchor="middle" class="sv-label-b">f · σ</text>
+      <text x="556" y="161" text-anchor="middle" class="sv-sub">forget</text>
+      <rect x="510" y="210" width="92" height="42" rx="5" class="sv-box"/>
+      <text x="556" y="228" text-anchor="middle" class="sv-label-b">i · σ</text>
+      <text x="556" y="243" text-anchor="middle" class="sv-sub">input</text>
+      <rect x="510" y="292" width="92" height="42" rx="5" class="sv-box"/>
+      <text x="556" y="310" text-anchor="middle" class="sv-label-b">g · tanh</text>
+      <text x="556" y="325" text-anchor="middle" class="sv-sub">candidate</text>
+      <rect x="510" y="374" width="92" height="42" rx="5" class="sv-box"/>
+      <text x="556" y="392" text-anchor="middle" class="sv-label-b">o · σ</text>
+      <text x="556" y="407" text-anchor="middle" class="sv-sub">output</text>
+
+      <!-- f up to first ⊙ -->
+      <polyline points="556,128 556,102 402,102 402,82" class="sv-wire" marker-end="url(#ah7)"/>
+      <!-- i and g into ⊙, then up to + -->
+      <polyline points="602,231 660,231 660,196" class="sv-wire" marker-end="url(#ah7)"/>
+      <polyline points="602,313 660,313 660,196" class="sv-wire"/>
+      <circle cx="660" cy="181" r="15" class="sv-op"/>
+      <text x="660" y="186" text-anchor="middle" class="sv-op-t">⊙</text>
+      <polyline points="660,166 660,110 562,110 562,82" class="sv-wire" marker-end="url(#ah7)"/>
+      <!-- c_t down through tanh to ⊙ with o -->
+      <polyline points="770,65 770,164" class="sv-wire" marker-end="url(#ah7)"/>
+      <rect x="732" y="166" width="76" height="34" rx="5" class="sv-box"/>
+      <text x="770" y="188" text-anchor="middle" class="sv-label-b">tanh</text>
+      <line x1="770" y1="200" x2="770" y2="286" class="sv-wire" marker-end="url(#ah7)"/>
+      <circle cx="770" cy="302" r="15" class="sv-op"/>
+      <text x="770" y="307" text-anchor="middle" class="sv-op-t">⊙</text>
+      <polyline points="602,395 770,395 770,317" class="sv-wire" marker-end="url(#ah7)"/>
+      <!-- h_t -->
+      <line x1="785" y1="302" x2="818" y2="302" class="sv-wire" marker-end="url(#ah7)"/>
+      <rect x="820" y="281" width="112" height="42" rx="5" class="sv-box-accent"/>
+      <text x="876" y="299" text-anchor="middle" class="sv-label-b">h_t</text>
+      <text x="876" y="314" text-anchor="middle" class="sv-shape" style="font-size:10px;">[B,32,32,32]</text>
+      <!-- h recurrence -->
+      <polyline points="876,323 876,448 82,448 82,362" class="sv-wire-dash" marker-end="url(#ah7)"/>
+      <text x="480" y="442" text-anchor="middle" class="sv-sub">next timestep</text>
+
+      <text x="480" y="478" text-anchor="middle" class="sv-label">c_t = σ(f) ⊙ c_{t−1} + σ(i) ⊙ tanh(g) &#8195;&#8195; h_t = σ(o) ⊙ tanh(c_t)</text>
+    </svg>
+    <figcaption><b>Figure 6 — inside the ConvLSTM cell.</b> Every wire carries a 32×32 <em>feature map</em>,
+    not a scalar: the forget gate can keep memory of the lake basin while discarding a passing cloud shelf,
+    because gating decisions are made per-location. One cell is unrolled over all 153 timesteps
+    (a Python loop in <code>CLSTM.forward</code>); hidden and cell state start at zeros, and there is no
+    forget-gate bias initialization on <code>main</code>.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p>Reading the output: the model takes the <strong>last timestep's</strong> hidden state
+    <span class="shape">[B,32,32,32]</span> — the LSTM's summary after having watched the whole
+    window — and collapses space with global average pooling to <span class="shape">[B,32]</span>.
+    Alternative readouts (mean/max over time, avg‖max pooling) exist as CV-grid axes but are not the
+    baseline.</p>
+
+    <h3>4.3 The scalar streams</h3>
+    <p>The area stream is a vanilla <code>nn.LSTM</code> with hidden size 16 over the
+    min-max-normalized water-area curve <span class="shape">[B,T,1]</span> → last timestep →
+    <span class="shape">[B,16]</span>. It's tiny (1,216 parameters) but potent: "area collapses
+    to zero in three frames" is nearly a drainage classifier on its own, and this stream hands the
+    model that signal directly. The cloudy stream is an identical LSTM over the per-frame
+    usefulness flag (1&nbsp;=&nbsp;useful, 0&nbsp;=&nbsp;cloudy) — currently off, pending the
+    cloudy-tile CNN retrain. Optional per-timestep learned weights
+    (<code>learn_area_weights</code>) can sigmoid-gate each frame's scalar before the LSTM.</p>
+
+    <h3>4.4 Fusion and head</h3>
+    <p>Feature vectors concatenate to <span class="shape">[B,48]</span> (32 image + 16 area) and a
+    one-hidden-layer MLP — 48 → 64 → ReLU → dropout 0.3 → 5 — produces logits. No softmax in the
+    model; <code>CrossEntropyLoss</code> applies it during training and inference scripts apply it
+    explicitly.</p>
+
+    <h3>4.5 Where the parameters live</h3>
+  </div>
+  <table>
+    <thead><tr><th>Component</th><th class="num">Parameters</th><th class="num">Share</th><th>What it learns</th></tr></thead>
+    <tbody>
+      <tr><td>ConvLSTM cell</td><td class="num">110,720</td><td class="num">79.1%</td><td>spatiotemporal dynamics (one 96→128-ch conv)</td></tr>
+      <tr><td>FrontCNN</td><td class="num">24,528</td><td class="num">17.5%</td><td>per-frame spatial features</td></tr>
+      <tr><td>ClassHeadMLP</td><td class="num">3,461</td><td class="num">2.5%</td><td>fusion → 5 classes</td></tr>
+      <tr><td>Area ScalarLSTM</td><td class="num">1,216</td><td class="num">0.9%</td><td>area-curve dynamics</td></tr>
+      <tr><td><strong>Total</strong></td><td class="num"><strong>139,925</strong></td><td class="num">100%</td><td></td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>Two things worth internalizing. First, <strong>parameter count is independent of spatial
+    size</strong> — the weights are conv kernels, so the ESSD-era 64×64 configuration has the exact
+    same 139,925 parameters as today's 32×32 one, but ~4× the ConvLSTM compute and activation memory.
+    Second, the model contains <strong>no normalization layers anywhere</strong> — no BatchNorm, no
+    GroupNorm, no LayerNorm. It trains anyway (LeakyReLU + small depth), but this is a live CV-grid
+    axis, and it makes the model unusually sensitive to input scaling — which is exactly why the
+    normalization mismatches in §08 matter.</p>
+
+    <h3>4.6 Variants you'll see in the code</h3>
+    <p><strong>Vector mode</strong> (<code>frontcnn_out_hw=(1,1)</code>): pool the FrontCNN output to
+    1×1, squeeze, and run a regular <code>nn.LSTM</code> instead of the ConvLSTM — 41,749 parameters,
+    no spatial reasoning through time. A cheap ablation baseline.
+    <strong>Attention</strong> (<code>attention_type</code>): <code>spatial</code> (CBAM spatial gate),
+    <code>full</code> (CBAM channel + spatial), or <code>arch</code> — a second FrontCNN encodes the
+    mask channel and its features multiply the imagery features, the only configuration in which the
+    mask influences anything. All were off for the ESSD baselines.</p>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="n">05</span>Training</h2>
+  <div class="prose">
+    <p>Everything is driven by <code>engine/training/run_training.py</code>, whose argparse defaults
+    <em>are</em> the ESSD baseline — the SLURM scripts beside it stay short on purpose. The recipe:</p>
+  </div>
+  <table>
+    <thead><tr><th>Knob</th><th>Baseline value</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Loss</td><td>CrossEntropy, inverse-frequency class weights</td><td>computed on the train split</td></tr>
+      <tr><td>Optimizer</td><td>Adam, lr 1e-4 fixed, weight decay 1e-5</td><td>no scheduler (flag exists for ablations)</td></tr>
+      <tr><td>Precision</td><td>bf16 autocast, on by default</td><td>no GradScaler needed (bf16 = fp32 range)</td></tr>
+      <tr><td>Batch / epochs / seed</td><td>8 / 400 / 42</td><td>bs=8 ≈ 28 GB VRAM on main; bs=32 OOMs a 40 GB A100</td></tr>
+      <tr><td>Labels</td><td><code>--label_mode essd_5class</code></td><td>string labels from GUI CSVs → ints 0–4</td></tr>
+      <tr><td>Splits</td><td><code>--{train,val,test}_ids_file</code></td><td>always pass the committed <code>splits/</code> files</td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>Three checkpoints stream out per run, all bare <code>state_dict</code>s (the ESSD format —
+    reconstruct the model from config before loading): <code>&lt;stem&gt;.pth</code> at best val loss —
+    this one is reloaded for the final test evaluation — <code>&lt;stem&gt;_bestf1.pth</code> at best
+    val macro-F1, and <code>&lt;stem&gt;_epoch{N}.pth</code> every 5 epochs. Per-epoch metrics go to
+    stdout and, when available, wandb.</p>
+    <p>A typical launch (Sherlock paths abbreviated):</p>
+  </div>
+  <pre><code>python3 engine/training/run_training.py \
+    --labels_csv labels/labels_CW_2018.csv labels/labels_CW_2019.csv \
+    --nc_dir $COMPOSITES_DIR \
+    --train_ids_file splits/essd_CW/train_ids.json \
+    --val_ids_file   splits/essd_CW/val_ids.json \
+    --test_ids_file  splits/essd_CW/test_ids.json \
+    --host_mem_budget_gb 325 \
+    --save_path models/run_name.pth</code></pre>
+  <div class="prose">
+    <p>Useful switches: <code>--max_lakes N</code> caps every split for smoke tests;
+    <code>--max_train_lakes N</code> is the learning-curve knob (valid because train IDs are
+    nested-stratified); <code>--augment</code> turns on D4 (default <code>random</code> mode —
+    but see §08 before using it); <code>--merge_classes MD LD</code> folds two classes for
+    4-class ablations; <code>--test_labels_csv</code> switches to cross-year mode.</p>
+  </div>
+
+  <div class="callout">
+    <span class="tag">Reproducing the ESSD baselines</span>
+    <p>The published runs used the <em>then-default</em> <code>frontcnn_out_hw=(64,64)</code>, which
+    silently <em>upsampled</em> the FrontCNN's 32×32 output to 64×64 — 4× ConvLSTM cost for no
+    information gain. Current <code>main</code> removed the default and made upsampling requests
+    <strong>raise</strong>. Consequence: several docstrings still say "pass <code>(64,64)</code> to
+    reproduce," but on <code>main</code> that now raises <code>ValueError</code> at the first forward.
+    The only faithful way to run or retrain the ESSD configuration is the frozen tag:
+    <code>git checkout essd-2026-submission</code>. Loading an ESSD checkpoint into today's default
+    32×32 model "works" — same weights, different forward — and will quietly give you different
+    predictions. See <code>docs/PROVENANCE_ESSD.md</code> for tags and the commit behind every number.</p>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="n">06</span>Evaluation &amp; results</h2>
+  <div class="prose">
+    <p>The headline metric is <strong>macro F1</strong> — the unweighted mean of per-class F1 — because
+    accuracy is inflated by the LD-heavy class balance. <code>run_training.py</code> reports
+    accuracy, macro precision/recall/F1, per-class F1, and a confusion matrix at the end of every run,
+    computed on the held-out test split with the best-val-loss checkpoint. Where the numbers stood at
+    ESSD submission:</p>
+  </div>
+  <table>
+    <thead><tr><th>Baseline</th><th class="num">Best val F1</th><th class="num">Test F1</th><th>Per-class test F1</th></tr></thead>
+    <tbody>
+      <tr><td>Cross-year (train 2019 → test 2018)</td><td class="num">0.620</td><td class="num">0.445</td><td>ND 0.46 · HF 0.47 · <strong>MD 0.06</strong> · LD 0.54 · CD 0.70</td></tr>
+      <tr><td>Combined 2018+2019, N=1,175</td><td class="num">0.607</td><td class="num">—</td><td>see <code>essd/inference/training_metrics/</code></td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>Two honest readings. The cross-year gap (0.62 val → 0.45 test) is the year-to-year
+    generalization cost, and moulin drainage (MD) is nearly unlearnable at this data scale —
+    it is visually subtle and easily confused with LD. And the learning curve says the models were
+    still improving when walltime ran out:</p>
+  </div>
+  <table>
+    <thead><tr><th class="num">N train lakes</th><th class="num">200</th><th class="num">400</th><th class="num">600</th><th class="num">800</th><th class="num">1000</th><th class="num">1175</th></tr></thead>
+    <tbody>
+      <tr><td>Best val macro F1</td><td class="num">0.498</td><td class="num">0.529</td><td class="num">0.567</td><td class="num">0.568</td><td class="num">0.564</td><td class="num">0.607</td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>Best-val epochs cluster at 330–400 of 400 — <strong>the ESSD baselines are compute-limited,
+    not converged</strong>. They are presented as reference points for a dataset paper, not tuned
+    models; the reported numbers are a floor. Squeezing the actual ceiling out of this architecture
+    is the planned cross-validation grid (<code>docs/CV_GRID.md</code>), which is blocked mainly on
+    the dataloader rewrite.</p>
+    <p>For batch inference, <code>engine/inference/run_inference.py</code> loads a checkpoint, walks a
+    list of lake IDs, and appends per-lake predictions with all five class probabilities to a
+    resumable CSV — flushed row by row so a SLURM kill leaves a valid partial file. Read §08 before
+    trusting its outputs against training-time metrics.</p>
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="n">07</span>Repo map</h2>
+  <table>
+    <thead><tr><th>Path</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td><code>lakevision/models/</code></td><td>the package's model code: <code>classifier.py</code> (top-level module), <code>blocks.py</code> (FrontCNN, ScalarLSTM, head, pooling), <code>clstm.py</code>, <code>attention.py</code></td></tr>
+      <tr><td><code>lakevision/data/</code></td><td><code>datasets.py</code> (LakeDataset), <code>transforms.py</code> (D4), <code>loader_plan.py</code> (RAM-budgeted workers), <code>preprocessing.py</code> + <code>synthesis.py</code> (composite writers), <code>utils.py</code> (dead legacy — don't use)</td></tr>
+      <tr><td><code>lakevision/tests/</code></td><td>146 pytest tests. Synthetic fixtures mirror both NC formats — including the SDR deposit schema with all six bands — so CI covers the real data layout; only the big-file tests need local data</td></tr>
+      <tr><td><code>engine/training/</code></td><td><code>run_training.py</code>, <code>split_fixed.py</code>, and the ESSD SLURM scripts</td></tr>
+      <tr><td><code>engine/preprocessing/</code></td><td><code>synthesize_region.py</code> (current composite builder) and <code>preprocess_tstacks.py</code> (legacy, 2019-hardcoded)</td></tr>
+      <tr><td><code>engine/inference/</code>, <code>engine/eval/</code></td><td><code>run_inference.py</code> (batch CSV) and <code>predict_lakes.py</code> (spot-check tool; currently broken — §08)</td></tr>
+      <tr><td><code>splits/</code>, <code>docs/</code></td><td>committed canonical splits; <code>PROVENANCE_ESSD.md</code> (tags → results) and <code>CV_GRID.md</code> (planned experiments)</td></tr>
+      <tr><td><code>datasets/</code>, <code>labels/</code></td><td>local-only sample data for tests and demos (gitignored)</td></tr>
+      <tr><td><code>sandbox/</code></td><td>pre-package legacy: five stale training monoliths with their <em>own</em> copies of the model classes, old notebooks and weights. Untracked from git in Aug 2026 (survives in old checkouts and history). If you grep for <code>ConvLSTM</code>, make sure you landed in <code>lakevision/</code>, not here</td></tr>
+      <tr><td><code>claudiary/</code></td><td>dated working logs (gitignored). The freshest source of truth — when a diary entry and an older doc disagree, the diary wins</td></tr>
+    </tbody>
+  </table>
+  <div class="prose">
+    <p>Good first hour: run <code>pytest lakevision/tests/</code> (all green in ~1 min on a laptop
+    with the sample data present), open <code>demos/demo_training.ipynb</code>, then read
+    <code>classifier.py</code> top to bottom with Figure 4 beside it — the file is 500 lines and
+    half docstring. Branch state as of this writing: <code>main</code> is the legacy-but-canonical
+    NetCDF pipeline; <code>feature/cache-data</code> holds a faster cache-based loader plus several
+    CV-grid features awaiting a clean re-land.</p>
+  </div>
+</section>
+
+<section id="s8">
+  <h2><span class="n">08</span>Sharp edges</h2>
+  <div class="prose">
+    <p>Current as of August 2026 — each of these was verified against the code, and several are the
+    kind that fail <em>silently</em>. Check the claudiary for anything that changed since.</p>
+    <ol>
+      <li><strong>The mask channel is loaded, then discarded.</strong> Unless
+      <code>attention_type='arch'</code>, the mask is split off in <code>forward()</code> and never
+      touches the computation — measured zero effect on logits. Paper text saying the model uses
+      "imagery + water_area + mask" describes the plumbing, not the math.
+      (<code>--mask_as_channel</code> exists on the branch.)</li>
+      <li><strong>ESSD checkpoints don't reproduce on <code>main</code>.</strong> Trained at 64×64;
+      main's model refuses to upsample (raises) and its default runs 32×32 — into which an ESSD
+      checkpoint loads <em>without error</em> and predicts differently. Use the
+      <code>essd-2026-submission</code> tag for anything ESSD-faithful; that is the tag's whole job.</li>
+      <li><strong>Cloudy-flag polarity trap.</strong> <code>cloudy_seq_*</code> is
+      1&nbsp;=&nbsp;useful. The stack-level <code>eo_cloud_cover</code> is scene-level <em>and</em>
+      inverted (1&nbsp;=&nbsp;cloudy) — never substitute one for the other. The missing-data
+      fallback is ones ("all frames useful") everywhere.</li>
+      <li><strong>Band flags are trust-based.</strong> <code>--use_swir22</code> isn't wired in the
+      training CLI at all, and nothing on <code>main</code> asserts dataset channels match model
+      channels — historically extra channels were silently dropped. The assert lives on
+      <code>feature/cache-data</code>; re-land it before running the spectral-bands axis.</li>
+      <li><strong>The README is only half-trustworthy.</strong> Its architecture tables were
+      corrected in August 2026, but the intro/installation sections are still placeholders.
+      Precedence for truth: code → <code>docs/</code> → claudiary → README.</li>
+    </ol>
+
+    <h3>Fixed in August 2026 — history that still matters</h3>
+    <p>These were live bugs until this audit; you'll meet their fingerprints in old outputs.</p>
+    <ul>
+      <li><strong>Inference used to skip training's normalization.</strong>
+      <code>run_inference.py</code> and <code>predict_lakes.py</code> (and the talk/comparison
+      notebooks they mirror) fed <em>raw</em> water area where training min-maxed it per sample,
+      and divided imagery by 10,000 without the [0,1] clip. Both scripts now mirror
+      <code>LakeDataset</code> exactly — which means <em>prediction CSVs generated before the fix
+      are not comparable</em> to training-time metrics or to new CSVs. Regenerate before reusing.</li>
+      <li><strong>NaN in the area series is now guarded end to end.</strong> Loaders raise on a
+      composite <code>water_area</code> containing any NaN and fill SDR <code>p_water</code>
+      (raising only on an all-NaN season); the writers refuse to emit an all-NaN series, and the
+      legacy preprocessor no longer hardcodes a 2019 date window. Before the guards, one NaN
+      silently turned the whole area stream — and the loss — into NaN.</li>
+      <li><strong><code>--augment</code> random mode drew one symmetry per lake per run</strong>
+      (<code>set_epoch</code> was never called). <code>run_training.py</code> now advances the
+      seeded draw each epoch. ESSD's <code>expand</code>-mode runs were never affected.</li>
+      <li><strong><code>predict_lakes.py</code> was dead</strong> — it fed <code>area_seq</code> as
+      <span class="shape">[1,T]</span>, which <code>ScalarLSTM</code> rejects. Fixed, and its
+      normalization now matches training.</li>
+      <li><strong><code>seq_len</code> is pinned to 153</strong> in the training CLI (the full melt
+      season) — deliberately not a CV-grid axis. If it's ever unpinned: the window math yields
+      <code>2·(seq_len//2)+1</code> frames, so keep it odd, and files shorter than
+      <code>seq_len</code> still crash the default collate at batch&nbsp;&gt;&nbsp;1.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <p>Further reading: <code>docs/PROVENANCE_ESSD.md</code> (which commit produced which number),
+  <code>docs/CV_GRID.md</code> (the planned experiment grid), Shi et&nbsp;al. 2015 (ConvLSTM),
+  Woo et&nbsp;al. 2018 (CBAM), Dunmire et&nbsp;al. 2025 (area sequences and lake polygons).
+  Data deposit: Stanford Digital Repository, DOI 10.25740/sf350xp4038.</p>
+  <p>Written from a code audit of <code>main</code> in August 2026. Numbers were computed by
+  instantiating the model, not by reading docstrings.</p>
+</footer>
+
+</main>
