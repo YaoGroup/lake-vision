@@ -11,6 +11,27 @@ from pathlib import Path
 from typing import Union, List, Optional, Dict
 
 
+def _ffill_bfill_1d(a: np.ndarray) -> np.ndarray:
+    """Forward-fill then back-fill NaNs in a 1-D float array.
+
+    Mirrors the ffill/bfill convention the composite writers use at write time
+    (see lakevision/data/synthesis.py). An all-NaN input comes back all-NaN —
+    callers must guard for that.
+    """
+    a = np.asarray(a, dtype=np.float32).copy()
+    n = a.size
+    nan = np.isnan(a)
+    idx = np.where(~nan, np.arange(n), 0)
+    np.maximum.accumulate(idx, out=idx)
+    a = a[idx]
+    nan = np.isnan(a)  # leading NaNs survive the forward fill
+    if nan.any():
+        idx = np.where(~nan, np.arange(n), n - 1)
+        idx = np.minimum.accumulate(idx[::-1])[::-1]
+        a = a[idx]
+    return a
+
+
 def load_band_stats(stats_path: Union[str, Path]) -> Dict[str, Dict[str, float]]:
     """
     Load band statistics from JSON file.
@@ -37,13 +58,23 @@ class LakeDataset(Dataset):
        - ``water_area``: [time]
        - Optional ``cloudy_seq_*`` variables
 
-    2. **Raw sat-tile-stack** (from sattile_stack):
-       - ``reflectance``: [time, band, y, x] with bands like
-         [B04, B03, B02, B08, B11, SCL, cloudmask]
-       - No water_area or cloudy_seq variables
+    2. **Raw sat-tile-stack / ESSD SDR deposit** (from sattile_stack):
+       - ``reflectance``: [time, band, y, x]. Band names come from a string
+         ``band`` coordinate or, in the SDR deposit, from the ``band_name``
+         char array beside an integer ``band`` index
+         (B04/B03/B02/B08/B11/B12 -> red/green/blue/nir/swir16/swir22)
+       - ``p_water``: [time] water fraction, used as the area sequence.
+         It is NaN on unusable (cloudy) days and is ffill/bfill-filled at
+         load — the same convention composites apply at write time.
 
-    The format is auto-detected per file. When water_area is absent the full
-    time dimension is used (no windowing around peak area).
+    The format is auto-detected per file. When neither water_area nor p_water
+    is present the full time dimension is used (no windowing around peak area).
+
+    NaN guards (fail loud, not silent): a composite ``water_area`` containing
+    any NaN raises (composites are written NaN-filled, so a NaN means a bad
+    file), and an all-NaN ``p_water`` raises (no usable observation all
+    season). Without these, one NaN would turn the whole min-max-normalized
+    area sequence — and the loss — into NaN.
 
     Args:
         data_paths: path to a single .nc file, a directory of .nc files, or a list of .nc file paths
@@ -259,10 +290,19 @@ class LakeDataset(Dataset):
                 coord_name = 'channel'
                 nc_channels_all = [_decode(c) for c in nc.variables[coord_name][:]]
             elif 'reflectance' in nc.variables:
-                # Raw sat-tile-stack format: reflectance [T, band, H, W]
+                # Raw sat-tile-stack / SDR format: reflectance [T, band, H, W].
+                # The SDR deposit stores an integer 'band' index with names in
+                # a 'band_name' char array; older stacks use a string 'band'
+                # coordinate directly.
                 var_name = 'reflectance'
-                coord_name = 'band'
-                raw_bands = [_decode(b) for b in nc.variables[coord_name][:]]
+                if 'band_name' in nc.variables:
+                    raw_bands = [
+                        ''.join(_decode(c) for c in np.atleast_1d(row))
+                        .strip('\x00').strip()
+                        for row in nc.variables['band_name'][:]
+                    ]
+                else:
+                    raw_bands = [_decode(b) for b in nc.variables['band'][:]]
                 # Map band names (B04, B03, ...) to canonical names (red, green, ...)
                 nc_channels_all = [self.BAND_TO_CHANNEL.get(b, b) for b in raw_bands]
             else:
@@ -289,7 +329,28 @@ class LakeDataset(Dataset):
 
             water_area = None
             if 'water_area' in nc.variables:
+                # Composites are written NaN-filled; a NaN here means a bad
+                # file (e.g. an all-NaN Dunmire series slipped through the
+                # writer). One NaN would poison the min-max-normalized
+                # area_seq, so refuse it.
                 water_area = np.asarray(nc.variables['water_area'][:], dtype=np.float32)
+                n_nan = int(np.isnan(water_area).sum())
+                if n_nan:
+                    raise ValueError(
+                        f"{fp}: water_area contains {n_nan}/{water_area.size} "
+                        f"NaN(s). Composites are written NaN-filled — rebuild "
+                        f"this file (lakevision/data/synthesis.py)."
+                    )
+            elif 'p_water' in nc.variables:
+                # SDR deposit: p_water is NaN on unusable days by design.
+                # Fill at load; only an all-NaN season is an error.
+                water_area = np.asarray(nc.variables['p_water'][:], dtype=np.float32)
+                if np.isnan(water_area).all():
+                    raise ValueError(
+                        f"{fp}: p_water is all-NaN (no usable observation all "
+                        f"season) — no such lake should exist in the deposit."
+                    )
+                water_area = _ffill_bfill_1d(water_area)
 
             cloudy_seq_data = None
             if self.cloudy_seq_var and self.cloudy_seq_var in nc.variables:
