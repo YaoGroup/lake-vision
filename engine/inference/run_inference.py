@@ -64,10 +64,20 @@ def predict_one(model, device, nc_path):
         ch_idxs = [ch_names.index(c) for c in ("red", "green", "blue", "mask")]
         imagery = np.asarray(nc.variables["imagery"][:, ch_idxs, :, :], dtype=np.float32)
         wa = np.asarray(nc.variables["water_area"][:], dtype=np.float32)
+    # Mirror LakeDataset's training-time normalization exactly: reflectance is
+    # clipped to [0,1] and the area series is min-max normalized per sample.
+    # CSVs produced before 2026-08 fed raw (unclipped, un-min-maxed) inputs and
+    # are not comparable to training-time metrics.
     for ci in range(3):
-        imagery[:, ci, :, :] /= 10000.0
+        imagery[:, ci, :, :] = np.clip(imagery[:, ci, :, :] / 10000.0, 0.0, 1.0)
     imagery = np.nan_to_num(imagery, nan=0.0)
-    wa = np.nan_to_num(wa, nan=0.0)
+    n_nan = int(np.isnan(wa).sum())
+    if n_nan:
+        raise ValueError(
+            f"water_area contains {n_nan} NaN(s); composites should be "
+            f"NaN-free — rebuild this file"
+        )
+    wa = (wa - wa.min()) / (wa.max() - wa.min() + 1e-8)
     img_seq = torch.from_numpy(imagery).unsqueeze(0).to(device)
     area_seq = torch.from_numpy(wa).unsqueeze(0).unsqueeze(-1).to(device)
     with torch.no_grad():

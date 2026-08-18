@@ -52,24 +52,33 @@ def load_lake(nc_path, seq_len=153, channels=None):
         if 'cloudy_seq_rgb' in nc.variables:
             cloudy_seq = np.asarray(nc.variables['cloudy_seq_rgb'][:], dtype=np.float32)
         else:
-            cloudy_seq = np.zeros(seq_len, dtype=np.float32)
+            # cloudy_seq polarity is 1=useful; the missing-data fallback must
+            # be ones ("all frames useful"), matching LakeDataset. Zeros would
+            # mean "all frames cloudy".
+            cloudy_seq = np.ones(seq_len, dtype=np.float32)
 
         # Get label from attrs
         label = nc.getncattr('label') if 'label' in nc.ncattrs() else '?'
 
-    # Normalize imagery: divide by 10000 for reflectance bands, leave mask as-is
+    # Mirror LakeDataset's training-time normalization: reflectance clipped to
+    # [0,1] (mask passed through), area min-max normalized per sample.
     for i, ch in enumerate(channels):
         if ch != 'mask':
-            imagery[:, i, :, :] /= 10000.0
+            imagery[:, i, :, :] = np.clip(imagery[:, i, :, :] / 10000.0, 0.0, 1.0)
 
-    # Replace NaN with 0
     imagery = np.nan_to_num(imagery, nan=0.0)
-    water_area = np.nan_to_num(water_area, nan=0.0)
+    n_nan = int(np.isnan(water_area).sum())
+    if n_nan:
+        raise ValueError(
+            f"{nc_path}: water_area contains {n_nan} NaN(s); composites "
+            f"should be NaN-free — rebuild this file"
+        )
+    water_area = (water_area - water_area.min()) / (water_area.max() - water_area.min() + 1e-8)
 
-    # Add batch dim
-    img_seq = torch.from_numpy(imagery).unsqueeze(0)       # [1, T, C, H, W]
-    area_seq = torch.from_numpy(water_area).unsqueeze(0)    # [1, T]
-    cloudy_seq = torch.from_numpy(cloudy_seq).unsqueeze(0)  # [1, T]
+    # Add batch dim (+ feature dim for the scalar sequences: [1, T, 1])
+    img_seq = torch.from_numpy(imagery).unsqueeze(0)                       # [1, T, C, H, W]
+    area_seq = torch.from_numpy(water_area).unsqueeze(0).unsqueeze(-1)     # [1, T, 1]
+    cloudy_seq = torch.from_numpy(cloudy_seq).unsqueeze(0).unsqueeze(-1)   # [1, T, 1]
 
     return img_seq, area_seq, cloudy_seq, label
 
@@ -114,7 +123,7 @@ def main():
     )
 
     # Load checkpoint
-    state_dict = torch.load(args.checkpoint, map_location=device)
+    state_dict = torch.load(args.checkpoint, map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
