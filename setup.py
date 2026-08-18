@@ -20,7 +20,6 @@ setup(
         "pillow>=9.5.0",
         "scikit-learn>=1.3.0",
         "netCDF4>=1.6.0",
-        "blosc2>=2.5.0",
     ],
     extras_require={
         # Composite synthesis only (engine/preprocessing/synthesize_region.py,
