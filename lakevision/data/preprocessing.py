@@ -14,8 +14,8 @@ from pathlib import Path
 def load_area_sequences(
         filepath: str,
         lake_ids: Optional[Union[str, List[str]]] = None,
-        start_date: str = '2019-05-01',
-        end_date: str = '2019-09-30',
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
 ) -> xr.Dataset:
     """
     Load area sequence data and filter by lake ids and date range.
@@ -23,8 +23,10 @@ def load_area_sequences(
     Args:
         filepath: Path to the area sequence .nc file (e.g., all_lakes_2019.nc)
         lake_ids: Single lake ID or list of lake IDs to filter. If None, return all lakes.
-        start_date: Start date for temporal filtering (default: '2019-05-01')
-        end_date: End date for temporal filtering (default: '2019-09-30')
+        start_date: Start date for temporal filtering. None (default) keeps the
+            full record — downstream alignment to imagery timestamps selects
+            the melt season, so no year needs to be hardcoded here.
+        end_date: End date for temporal filtering (default: None, see above)
 
     Returns:
         xr.Dataset: filtered area sequence dataset
@@ -54,8 +56,9 @@ def load_area_sequences(
         else:
             ds = ds.sel(ids=lake_ids)
         
-    # filter by time range 
-    ds = ds.sel(time=slice(start_date, end_date))
+    # filter by time range (no-op when both bounds are None)
+    if start_date is not None or end_date is not None:
+        ds = ds.sel(time=slice(start_date, end_date))
 
     return ds
 
@@ -86,7 +89,7 @@ def filter_lakes_by_substring(ds: xr.Dataset, substring: str) -> xr.Dataset:
 
 def fill_nan_timeseries(
         data: Union[xr.DataArray, pd.Series, np.ndarray],
-        method: str = 'ffil_bfill',
+        method: str = 'ffill_bfill',
         time_coord: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
@@ -429,6 +432,26 @@ def combine_lake_data(
     # use imagery time coordinate as primary
     time_to_use = img_time_coords
 
+    # Refuse to write a poisoned file: an all-NaN series means the area data
+    # never overlapped the imagery dates (e.g. wrong year's area file). A
+    # partly-NaN series (interpolation edges) is re-filled here so the written
+    # water_area is guaranteed NaN-free — LakeDataset raises on NaNs at load.
+    water_area = np.asarray(water_area, dtype=np.float64)
+    if np.isnan(water_area).all():
+        raise ValueError(
+            f"{lake_id}: water_area is all-NaN after alignment — the area "
+            f"file does not cover the imagery's date range "
+            f"({np.min(img_time_coords)} .. {np.max(img_time_coords)})."
+        )
+    if np.isnan(water_area).any():
+        water_area = fill_nan_timeseries(water_area, method='ffill_bfill')
+
+    # Derive the year from the imagery time axis instead of hardcoding it
+    try:
+        year = int(pd.to_datetime(img_time_coords[0]).year)
+    except (ValueError, TypeError):
+        year = -1  # non-datetime time axis (synthetic/test data)
+
     # create combined dataset
     ds_combined = xr.Dataset(
         data_vars={
@@ -443,7 +466,7 @@ def combine_lake_data(
         attrs={
             'description': 'Combined lake drainage dataset',
             'lake_id': lake_id,
-            'year': 2019,
+            'year': year,
             'source_imagery': imagery_path,
             'channels': ', '.join(channel_names),
         },

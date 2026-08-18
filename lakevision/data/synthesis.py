@@ -393,7 +393,18 @@ class LakeDatasetSynthesizer:
             sliced, self.lake_id, variable='S2_water',
             fill_nans=True, fill_method='ffill_bfill',
         )
-        return area.astype(np.float32)
+        area = area.astype(np.float32)
+        # ffill/bfill leaves an all-NaN series all-NaN. Refuse to write it:
+        # one NaN in water_area poisons the min-max-normalized area stream at
+        # training time (and LakeDataset now raises on it).
+        if np.isnan(area).any():
+            raise ValueError(
+                f'{self.lake_id}: water_area still contains NaN after '
+                f'ffill/bfill — the Dunmire S2_water series is empty or '
+                f'all-NaN in {start}..{end}. Refusing to write a poisoned '
+                f'composite.'
+            )
+        return area
 
     def _assemble_dataset(self) -> xr.Dataset:
         """Compose imagery + water_area + coords + attrs into a final Dataset."""
