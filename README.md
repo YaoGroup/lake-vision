@@ -13,6 +13,10 @@ Installation guide...
 
 <img src="assets/training_visualization.gif" alt="Training Visualization" width="480px" />
 
+The next planned experiment is a cross-validation grid over architecture and
+input options — see [docs/CV_GRID.md](docs/CV_GRID.md) for the axes, the
+protocol, and the workload shape the training pipeline should be optimized for.
+
 ## Data Pipeline
 
 The data preprocessing pipeline combines multi-source lake data into standardized NetCDF files for training and inference.
