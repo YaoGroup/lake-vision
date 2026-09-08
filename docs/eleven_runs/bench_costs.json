@@ -1,0 +1,74 @@
+[
+ {
+  "name": "ESSD as published (64\u00d764 upsample)",
+  "params": 139925,
+  "gflops_per_frame": 1.4722051413333332,
+  "gflops_per_lake": 225.247386624
+ },
+ {
+  "name": "R0 reference (32\u00d732, no upsample)",
+  "params": 139925,
+  "gflops_per_frame": 0.7927278933333334,
+  "gflops_per_lake": 121.28736768
+ },
+ {
+  "name": "R1 readout: temporal attention + avg+max",
+  "params": 142038,
+  "gflops_per_frame": 0.7927620266666666,
+  "gflops_per_lake": 121.29259008
+ },
+ {
+  "name": "R2 conditioning: GroupNorm (+forget bias, cosine)",
+  "params": 140165,
+  "gflops_per_frame": 0.7927278933333334,
+  "gflops_per_lake": 121.28736768
+ },
+ {
+  "name": "R3 pixels: standardise + mean-fill + validity channel",
+  "params": 139997,
+  "gflops_per_frame": 0.8304766293333333,
+  "gflops_per_lake": 127.062924288
+ },
+ {
+  "name": "R4 observed flag: p_water flag via the cloudy_seq slot",
+  "params": 142165,
+  "gflops_per_frame": 0.792730752,
+  "gflops_per_lake": 121.287805056
+ },
+ {
+  "name": "R5 masks: +static +dynamic mask channels",
+  "params": 140069,
+  "gflops_per_frame": 0.8682253653333334,
+  "gflops_per_lake": 132.838480896
+ },
+ {
+  "name": "R6 attention: spatial CBAM on the feature map",
+  "params": 140023,
+  "gflops_per_frame": 0.7929285973333333,
+  "gflops_per_lake": 121.318075392
+ },
+ {
+  "name": "R7 spectral: +NIR +SWIR16",
+  "params": 140069,
+  "gflops_per_frame": 0.8682253653333334,
+  "gflops_per_lake": 132.838480896
+ },
+ {
+  "name": "R8 soft targets (no architecture change)",
+  "params": 139925,
+  "gflops_per_frame": 0.7927278933333334,
+  "gflops_per_lake": 121.28736768
+ },
+ {
+  "name": "R9 capacity: base 16 \u00b7 hidden 64",
+  "params": 546789,
+  "gflops_per_frame": 2.9444072106666663,
+  "gflops_per_lake": 450.494303232
+ },
+ {
+  "name": "R10 the stack (R1\u2013R8 together)",
+  "params": 144976,
+  "gflops_per_frame": 0.9817092693333334,
+  "gflops_per_lake": 150.201518208
+ }
+]
