@@ -241,7 +241,7 @@
   <div class="run"><div class="id">R9</div><div>
     <h3>Capacity · 16 base channels, 64 hidden</h3>
     <div class="meta"><span>main flags + gradient checkpointing</span><span>546,789 params</span><span>3.7× GFLOP</span></div>
-    <p>The run that died twice, resubmitted with the 32×32 map, gradient checkpointing on and batch 8. The diagnosis says this is the least likely lever: the current model underfits, and the one earlier high-capacity run on the combined split peaked at 0.57 by epoch 49 and then overfit. It is here because the question keeps coming back and a clean null on the cross-year split closes it. It is the only run whose cost is not free, and the last to be cut if the budget shrinks.</p>
+    <p>The run that died twice, resubmitted with the 32×32 map on an 80 GB A100, with the SKU constraint the second attempt lacked. The diagnosis says this is the least likely lever: the current model underfits, and the one earlier high-capacity run on the combined split peaked at 0.57 by epoch 49 and then overfit. It is here because the question keeps coming back and a clean null on the cross-year split closes it. It is the only run whose cost is not free, and the last to be cut if the budget shrinks.</p>
   </div></div>
 
   <div class="run"><div class="id">R10</div><div>
@@ -298,7 +298,7 @@
     </ul>
     <ul class="check">
       <li>Train on the deposit stacks (<span class="mono">stacks_v2</span>), not the legacy composites: the composites dropped the dynamic mask, and the deposit is what the DOI reproduces. R3 and R5 need it.</li>
-      <li>One sbatch array script with the run matrix in a table at the top, wandb offline, group and tags per run, commit SHA in every checkpoint.</li>
+      <li>One sbatch array script with the run matrix in a table at the top, two arrays (eight runs on 40 GB A100s, R2 R9 R10 on 80 GB A100s with both features in the constraint), <span class="mono">--host_mem_budget_gb 200</span>, a per-epoch print of peak GPU memory, wandb offline, group and tags per run, commit SHA in every checkpoint.</li>
       <li>A 5-epoch smoke test of the array on 50 lakes before the real submission. The last two capacity runs failed before their first epoch; a smoke test would have caught both.</li>
       <li>Coordinate with the Sherlock colleague: the runs target main's legacy NetCDF path unless her cached loader has landed, in which case they target hers.</li>
       <li>Score every finished run on the Terminal-Bench 40 with the task's own verifier so the site's ladder can update without a second pipeline.</li>
@@ -329,7 +329,7 @@
       <tr><th>deposit data</th><td>Oak, mounted on the Mac at <span class="mono">/Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks_v2/CW_2018</span> (679 files) and <span class="mono">CW_2019</span> (1000). On Sherlock the same tree is <span class="mono">/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks_v2</span>. Twelve local copies at <span class="mono">dissertation/defense/cinematic/source_data/stacks/CW_2019</span> for smoke tests.</td></tr>
       <tr><th>labels · splits</th><td><span class="mono">/oak/.../JoshRines/data/essd_labels/labels_CW_{2018,2019}.csv</span> · <span class="mono">splits/essd_CW_crossyear/{train,val,test}_ids.json</span> in the repo (800 / 200 / 679)</td></tr>
       <tr><th>runs · logs</th><td><span class="mono">/oak/.../JoshRines/sherlock/sherlock_lakevision/{models,logs,wandb}</span> · repo clone on Sherlock at <span class="mono">/oak/.../JoshRines/repos/lake-vision</span></td></tr>
-      <tr><th>the template</th><td><span class="mono">engine/training/run_training_essd_crossyear.sh</span> is the sbatch every run copies: serc, 1 × A100 SXM4, 16 CPUs, 256 GB, 72 h, rsync to <span class="mono">$L_SCRATCH</span>, <span class="mono">ml py-pytorch/2.2.1_py312</span>, wandb offline.</td></tr>
+      <tr><th>the template</th><td><span class="mono">engine/training/run_training_essd_crossyear.sh</span> is the sbatch every run copies: serc, 1 × A100 SXM4 (keep the <span class="mono">GPU_SKU</span> constraint; <span class="mono">GPU_MEM:80GB</span> lands on an H100 the torch module cannot drive), 16 CPUs, 256 GB, 72 h, rsync to <span class="mono">$L_SCRATCH</span>, <span class="mono">ml py-pytorch/2.2.1_py312</span>, wandb offline.</td></tr>
       <tr><th>this doc's numbers</th><td>confusion + F1 from <span class="mono">inference_essd/crossyear/*_predictions_bestf1.csv</span>; costs from a FLOP-counter bench over <span class="mono">lakevision.models</span>; missing-day stats from the twelve local stacks.</td></tr>
     </tbody>
   </table></div>
@@ -363,7 +363,7 @@
   </ul>
 
   <h3>The run matrix</h3>
-  <p>All eleven share the template's data, split and label arguments. Only these flags differ. Every run also logs train macro-F1 per epoch and scores the 40 Terminal-Bench lakes at the end with the task's verifier.</p>
+  <p>All eleven share the template's data, split and label arguments and all eleven pass <span class="mono">--host_mem_budget_gb 200</span>; R2, R9 and R10 go up as a second array on 80 GB A100s (see <em>Memory, measured</em>). Only these flags differ. Every run also logs train macro-F1 per epoch and scores the 40 Terminal-Bench lakes at the end with the task's verifier.</p>
   <div class="fig"><table>
     <thead><tr><th>run</th><th>flags beyond the template</th></tr></thead>
     <tbody>
@@ -376,15 +376,38 @@
       <tr><td class="id">R6</td><td class="mono">--attention_type spatial</td></tr>
       <tr><td class="id">R7</td><td class="mono">--use_nir --use_swir16</td></tr>
       <tr><td class="id">R8</td><td class="mono">--soft_labels</td></tr>
-      <tr><td class="id">R9</td><td class="mono">--frontcnn_base_channels 16 --clstm_hidden 64 --gradient_checkpointing</td></tr>
+      <tr><td class="id">R9</td><td class="mono">--frontcnn_base_channels 16 --clstm_hidden 64</td></tr>
       <tr><td class="id">R10</td><td class="mono">R1 + R2 + R3 + R4 + R5 + R6 + R7 + R8 flags together</td></tr>
     </tbody>
   </table></div>
 
+  <h3 style="margin-top:22px">Memory, measured</h3>
+  <p>Both capacity runs died for reasons that are now known and neither was the model's fault alone. Job 22043892 ran out of memory inside the front CNN's max-pool at 35 GB on a 40 GB A100, with bf16 autocast already on. Job 22429909 asked for <span class="mono">GPU_MEM:80GB</span> instead of the A100 SKU, landed on an H100, and the <span class="mono">py-pytorch/2.2.1</span> module has no sm_90 kernels for cuDNN's LSTM, so it died in <span class="mono">flatten_parameters</span> before the first batch. Every script in the array must carry <span class="mono">-C GPU_SKU:A100_SXM4</span>.</p>
+  <p>The table is <span class="mono">mem_bench.py</span>: the bytes each run saves for backward, counted with saved-tensor hooks on the repo's own modules under bf16 autocast at batch 1, scaled to batch 8 × 153 frames, plus the fp32 input batch. The front CNN is the whole footprint. Its first conv layer at 512×512, the LeakyReLU output and the int64 max-pool indices dominate, which is why main's whole-FrontCNN checkpoint recovers only 1 to 2 GB: the checkpointed segment rematerialises all four layers at once. GroupNorm adds ten GB because it saves the conv output a second time.</p>
+  <div class="fig"><table>
+    <thead><tr><th>run</th><th>in ch</th><th>input batch</th><th>front CNN</th><th>rest</th><th>peak, bs 8</th><th>peak, bs 4</th></tr></thead>
+    <tbody>
+      <tr><td class="id">R0</td><td>3</td><td>4</td><td>23</td><td>1</td><td><strong>28</strong></td><td>14</td></tr>
+      <tr><td class="id">R1</td><td>3</td><td>4</td><td>23</td><td>1</td><td><strong>28</strong></td><td>14</td></tr>
+      <tr><td class="id">R2</td><td>3</td><td>4</td><td>33</td><td>1</td><td><strong>38</strong></td><td>19</td></tr>
+      <tr><td class="id">R3</td><td>4</td><td>5</td><td>24</td><td>1</td><td><strong>30</strong></td><td>15</td></tr>
+      <tr><td class="id">R4</td><td>3</td><td>4</td><td>23</td><td>1</td><td><strong>28</strong></td><td>14</td></tr>
+      <tr><td class="id">R5</td><td>5</td><td>6</td><td>25</td><td>1</td><td><strong>32</strong></td><td>16</td></tr>
+      <tr><td class="id">R6</td><td>3</td><td>4</td><td>23</td><td>1</td><td><strong>28</strong></td><td>14</td></tr>
+      <tr><td class="id">R7</td><td>5</td><td>6</td><td>25</td><td>1</td><td><strong>32</strong></td><td>16</td></tr>
+      <tr><td class="id">R8</td><td>3</td><td>4</td><td>23</td><td>1</td><td><strong>28</strong></td><td>14</td></tr>
+      <tr><td class="id">R9</td><td>3</td><td>4</td><td>45</td><td>2</td><td><strong>51</strong></td><td>25</td></tr>
+      <tr><td class="id">R10</td><td>8</td><td>10</td><td>36</td><td>1</td><td><strong>48</strong></td><td>24</td></tr>
+    </tbody>
+  </table>
+  <div class="small">GB. bf16 autocast, 40 GB A100, no headroom for the CUDA context or allocator fragmentation, so treat 32 as the ceiling at batch 8. R9 and R10 do not fit; R2 is marginal.</div></div>
+  <p><strong>The fix is an 80 GB A100 for R2, R9 and R10, at batch 8 like everything else.</strong> They fit with 30 GB to spare and the ESSD configuration is untouched. The constraint has to name both features, <span class="mono">-C "GPU_SKU:A100_SXM4&amp;GPU_MEM:80GB"</span>: <span class="mono">GPU_MEM:80GB</span> alone is how the last attempt ended up on an H100. A constraint cannot vary inside one array, so the eleven go up as two arrays, eight runs on 40 GB cards and three on 80 GB. Check that serc actually has 80 GB A100s free before relying on them (<span class="mono">sinfo -p serc -o "%20N %10G %60f" | grep -i 80GB</span>); the fallback that needs no special node is <span class="mono">--batch_size 4 --accumulation_steps 2</span>, which halves every number in the table and, with no BatchNorm in the model, gives the same gradient as batch 8 from the same sampler order. Either way pass <span class="mono">--host_mem_budget_gb 200</span>: at 8 input channels a sample is 1.3 GB and 12 workers × 2 prefetch × batch 8 is 246 GB, right at the template's 256 GB and enough to get R10 killed by the cgroup rather than the GPU. The three big runs should also ask for <span class="mono">--mem 320GB</span>, as the earlier high-capacity scripts did.</p>
+  <p>Wall clock is the other hard limit. At 14.5 minutes an epoch the healthy runs projected 100 h for 400 epochs and were killed at 72 h; the best-F1 checkpoint is written as it improves, so a killed run still leaves a usable model, but it does not leave a clean stop. Either accept about 290 epochs or pass <span class="mono">--epochs 290</span> so every run ends the same way. Log <span class="mono">torch.cuda.max_memory_allocated()</span> once per epoch; the smoke job reads it against this table.</p>
+
   <h3 style="margin-top:22px">Gate before the real submission</h3>
   <ul>
-    <li>All eleven configurations run 2 epochs on the twelve local stacks on the Mac (MPS or CPU, batch 2) and produce a finite loss. This catches shape and flag errors in minutes.</li>
-    <li>Then one Sherlock smoke job, with Josh's OK: the array over 50 lakes for 5 epochs. Both earlier capacity runs died before epoch 1; this is the check that would have caught them. Record epoch time per run here to confirm the 72 h budget.</li>
+    <li>All eleven configurations run 2 epochs on the twelve local stacks on the Mac (CPU, batch 1: the Mac has 17 GB) and produce a finite loss. This catches shape and flag errors in minutes.</li>
+    <li>Then one Sherlock smoke job, with Josh's OK: the array over 50 lakes for 5 epochs. Both earlier capacity runs died before epoch 1; this is the check that would have caught them. Record epoch time and peak GPU memory per run here, against the 72 h budget and the memory table.</li>
     <li>Only then the full array. Print the sbatch line, wait for the word.</li>
   </ul>
   <p class="small">Estimated effort: two days for the code and tests, half a day for the scripts and the smoke test, then the array runs in three days of wall clock if all eleven schedule at once.</p>

@@ -21,6 +21,8 @@ https://claude.ai/code/artifact/1ce47cc8-92e4-4be1-8839-302d482b99da
 | `ELEVEN_RUNS.html` | the proposal, diagnosis and hand-off brief |
 | `bench_variants.py` | measures parameters and forward FLOPs per lake for every run's architecture, using this repo's own modules (`torch.utils.flop_counter`); run from the repo root with the `lakevision` env |
 | `bench_costs.json` | the bench output the page quotes (ESSD as published 225 GFLOP/lake; R0 121; R10 150; R9 451) |
+| `mem_bench.py` | saved-for-backward bytes per run under bf16 autocast, scaled to batch 8 × 153 frames; run from the repo root with the `lakevision` env |
+| `mem_costs.json` | the bench output the page quotes (R0 28 GB, R2 38, R10 48, R9 51 at batch 8; halve for batch 4) |
 | `diagnosis_numbers.py` | reproduces the diagnosis numbers from published tables and local copies: the 679-lake confusion, the Terminal-Bench 40 (unanimity 27/40, labeler and model scores), the combined model's split leakage, missing-day statistics |
 
 ## The runs, in one line each
@@ -38,6 +40,13 @@ https://claude.ai/code/artifact/1ce47cc8-92e4-4be1-8839-302d482b99da
 | R8 | soft targets from `label_probability` |
 | R9 | capacity: base 16, hidden 64 (expected null; the run that died twice) |
 | R10 | the stack: R1–R8 together |
+
+Memory: at batch 8 R9 and R10 exceed a 40 GB A100 and R2 is marginal, so those three
+go up as a second array on 80 GB A100s with both features in the constraint,
+`-C "GPU_SKU:A100_SXM4&GPU_MEM:80GB"` (`GPU_MEM:80GB` alone lands on an H100 that
+`py-pytorch/2.2.1` cannot drive). Fallback if none are free:
+`--batch_size 4 --accumulation_steps 2` (no BatchNorm, so the gradient is
+identical). Every run passes `--host_mem_budget_gb 200`.
 
 Protocol: the committed cross-year split, selection on val macro-F1, test scored
 once, the 40 Terminal-Bench lakes scored too, ±0.03–0.05 treated as a tie, train
