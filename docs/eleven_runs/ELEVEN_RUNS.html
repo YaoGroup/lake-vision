@@ -152,7 +152,7 @@
     </div>
     <div>
       <h3>The days that aren't there</h3>
-      <p>In the local stacks 21 to 42% of days have no scene and go in as all-zero frames. Those are learnable as "blank" in principle: a real scene's darkest pixel is thousands of DN. The days that are not learnable are the partial ones, where a swath edge leaves 30 to 99% of the tile at zero and the rest real (up to 32 days a season in the western tiles), and <span class="mono">p_water</span>, which is NaN on 52 to 71% of days and forward-filled into a flat line that reads as a stable lake. The model has no flag for either.</p>
+      <p>In the local stacks 21 to 42% of days have no scene and go in as all-zero frames. Those are learnable as "blank" only approximately: in the twelve local stacks the darkest observed red pixel is 1 DN in two lakes and 1,500 to 5,300 in the other ten, and up to half a percent of real pixels sit below 100 DN, so an all-zero frame is not cleanly separable from dark ice pixel by pixel. The days that are not learnable are the partial ones, where a swath edge leaves 30 to 99% of the tile at zero and the rest real (up to 32 days a season in the western tiles), and <span class="mono">p_water</span>, which is NaN on 52 to 71% of days and forward-filled into a flat line that reads as a stable lake. The model has no flag for either.</p>
     </div>
   </div>
   <figure style="margin-top:22px">
@@ -228,7 +228,7 @@
 
   <div class="run"><div class="id">R7</div><div>
     <h3>Spectral · near-infrared and SWIR 1610 nm</h3>
-    <div class="meta"><span>use_nir on main · SWIR16 wiring on branch</span><span>+140 params</span><span>+10%</span></div>
+    <div class="meta"><span>use_nir and use_swir16 on main; the dataset already selects deposit bands by name</span><span>+140 params</span><span>+10%</span></div>
     <p>Water absorbs strongly in the near and shortwave infrared; slush, refrozen lids and shadowed ice do not. The bands are in every deposit file and have never been consumed. The August notes called SWIR16 the most promising unexplored lever for moulin drainage, where a lake that drains slowly through a persistent hole looks, in RGB, much like one refreezing in place.</p>
   </div></div>
 
@@ -293,7 +293,7 @@
       <li>Attention-pool readout (R1): ~30 lines in the classifier plus a test, mask-aware.</li>
       <li>Standardisation with mean-fill and the validity channel in <span class="mono">LakeDataset</span> (R3), plus a script that writes <span class="mono">band_stats.json</span> from the training split, per band, NaN-aware; the <span class="mono">p_water</span> observed-flag series (R4).</li>
       <li>Soft-target loss behind <span class="mono">--soft_labels</span> (R8), reading <span class="mono">label_probability</span> from the deposit files or the label CSVs.</li>
-      <li>SWIR16 loading (R7) on the deposit's band order, indexed by name not position.</li>
+      <li>SWIR16 (R7) needs no loader work: main's <span class="mono">_load_from_disk</span> already resolves deposit bands by name. Add the channel-count assert and a test on a real deposit file.</li>
       <li>Warm-up plus cosine schedule behind a flag (R2); the trainer has <span class="mono">--use_scheduler</span> but no warm-up.</li>
     </ul>
     <ul class="check">
@@ -525,7 +525,7 @@
     { id: 'R4', short: 'observed flag', change: 'p_water observed flag as a second scalar stream', tests: 'Does the model need to know the area curve has gaps?', code: 'main', params: 142165, g: 121.3 },
     { id: 'R5', short: 'masks', change: 'Static outline + daily NDWI mask as channels', tests: 'Where the water went, as an image.', code: 'branch', params: 140069, g: 132.8 },
     { id: 'R6', short: 'attention', change: 'Spatial CBAM on the feature map', tests: 'Can learned attention keep the outlet stream?', code: 'main', params: 140023, g: 121.3 },
-    { id: 'R7', short: 'spectral', change: '+ NIR + SWIR 1610 nm', tests: 'Water vs slush vs refrozen lid, for MD.', code: 'branch', params: 140069, g: 132.8 },
+    { id: 'R7', short: 'spectral', change: '+ NIR + SWIR 1610 nm', tests: 'Water vs slush vs refrozen lid, for MD.', code: 'main', params: 140069, g: 132.8 },
     { id: 'R8', short: 'soft targets', change: 'Soft targets from label_probability', tests: 'The contested lakes: 23 % vs 63 %.', code: 'new', params: 139925, g: 121.3 },
     { id: 'R9', short: 'capacity', change: 'Capacity: base 16, hidden 64', tests: 'The run that died twice. Expected null.', code: 'main', params: 546789, g: 450.5 },
     { id: 'R10', short: 'the stack', change: 'The stack: R1–R8 together', tests: 'The ceiling. The number for the site.', code: 'new', params: 144976, g: 150.2 },
