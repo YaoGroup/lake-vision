@@ -301,3 +301,73 @@ class TestTrainerPieces:
         assert rows[0] == "lake_id,true_label,pred_label,p_ND,p_HF,p_MD,p_LD,p_CD"
         assert rows[1].startswith("A,ND,HF,0.500000")
         assert np.load(out.with_suffix(".attn.npz"))["weights"].shape == (2, 4)
+
+
+# --------------------------------------------------------------------------- end to end
+def _deposit_dir(tmp_path, n=6, hw=32):
+    """n tiny deposit files (T=6, hw x hw) plus a 5-class label CSV with soft columns."""
+    d = tmp_path / "stacks"; d.mkdir()
+    labels = ["ND", "HF", "MD", "LD", "CD", "LD"]
+    rows = ["lake_id,label,p_ND,p_HF,p_MD,p_LD,p_CD"]
+    for i in range(n):
+        fp = d / f"CW2019_{i:04d}.nc"
+        rng = np.random.default_rng(i)
+        refl = rng.uniform(1000, 9000, (T, 6, hw, hw)).astype(np.float32)
+        refl[2] = np.nan
+        with netCDF4.Dataset(fp, "w") as nc:
+            for nm, s in [("time", T), ("band", 6), ("y", hw), ("x", hw), ("string3", 3)]:
+                nc.createDimension(nm, s)
+            v = nc.createVariable("reflectance", "f4", ("time", "band", "y", "x")); v[:] = refl
+            v = nc.createVariable("band", "i4", ("band",)); v[:] = np.arange(6)
+            v = nc.createVariable("band_name", "S1", ("band", "string3"))
+            v.set_auto_chartostring(False)
+            v[:] = np.array(BANDS, dtype="S3").view("S1").reshape(6, 3)
+            v = nc.createVariable("p_water", "f4", ("time",))
+            v[:] = np.array([np.nan, 0.2, np.nan, 0.9, np.nan, 0.4], np.float32)
+            v = nc.createVariable("lake_boundary", "u1", ("y", "x")); v[:] = (rng.random((hw, hw)) > 0.7)
+            v = nc.createVariable("water_mask_ndwi", "u1", ("time", "y", "x"), fill_value=255)
+            v[:] = (rng.random((T, hw, hw)) > 0.8).astype(np.uint8)
+        p = np.zeros(5); p[["ND", "HF", "MD", "LD", "CD"].index(labels[i])] = 0.8; p[(i + 1) % 5] += 0.2
+        rows.append(f"CW2019_{i:04d},{labels[i]}," + ",".join(f"{x:.2f}" for x in p))
+    csv = tmp_path / "labels.csv"; csv.write_text("\n".join(rows) + "\n")
+    ids = [f"CW2019_{i:04d}" for i in range(n)]
+    for name, sub in [("train", ids[:4]), ("val", ids[4:5]), ("test", ids[5:6])]:
+        json.dump(sub, open(tmp_path / f"{name}_ids.json", "w"))
+    stats = {c: {"mean": 5000.0, "std": 2300.0} for c in ["red", "green", "blue", "nir", "swir16", "swir22"]}
+    json.dump(stats, open(tmp_path / "band_stats.json", "w"))
+    return d, csv
+
+
+R10_FLAGS = dict(temporal_readout="attn", pool_type="both", frontcnn_norm="group", clstm_forget_bias=1.0,
+                 lr_schedule="warmup_cosine", warmup_epochs=1, fill="mean", validity_channel=True,
+                 use_cloudyseq=True, cloudy_seq_var="observed", mask_source="both", attention_type="spatial",
+                 use_nir=True, use_swir16=True, soft_labels=True)
+
+
+@pytest.mark.parametrize("flags", [dict(), R10_FLAGS, dict(frontcnn_base_channels=16, clstm_hidden=64)],
+                         ids=["R0", "R10", "R9"])
+def test_trainer_end_to_end(tmp_path, flags):
+    d, csv = _deposit_dir(tmp_path)
+    config = dict(
+        labels_csv=[str(csv)], test_labels_csv=None, nc_dir=str(d), label_mode="essd_5class",
+        id_col="lake_id", label_col="label", merge_classes=None,
+        train_ids_file=str(tmp_path / "train_ids.json"), val_ids_file=str(tmp_path / "val_ids.json"),
+        test_ids_file=str(tmp_path / "test_ids.json"),
+        epochs=2, batch_size=2, lr=1e-3, weight_decay=0.0, amp=False, use_scheduler=False, lr_schedule="none",
+        warmup_epochs=10, lr_min=1e-6, num_workers=0, seed=0, seq_len=153, stratify=True,
+        band_stats=str(tmp_path / "band_stats.json") if flags.get("fill") == "mean" else None,
+        no_mask=True, num_classes=5, frontcnn_num_layers=4, frontcnn_out_hw=None, classhead_dropout=0.0,
+        gradient_checkpointing=False, accumulation_steps=1, preload_to_ram=False,
+        save_path=str(tmp_path / "m.pth"), test_checkpoint="f1",
+        test_predictions_csv=str(tmp_path / "pred.csv"), no_wandb=True,
+    )
+    config.update(flags)
+    best_val_loss, test_metrics = rt.train(config)
+    assert np.isfinite(best_val_loss) and np.isfinite(test_metrics["f1_macro"])
+    assert (tmp_path / "m_bestf1.pth").exists()
+    state, meta = load_checkpoint(tmp_path / "m_bestf1.pth")
+    assert meta["config"].get("temporal_readout", "last") == flags.get("temporal_readout", "last")
+    lines = (tmp_path / "pred.csv").read_text().splitlines()
+    assert len(lines) == 2 and lines[1].startswith("CW2019_0005,LD,")
+    if flags.get("temporal_readout") == "attn":
+        assert (tmp_path / "pred.attn.npz").exists()

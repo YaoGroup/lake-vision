@@ -9,8 +9,12 @@ For wandb sweeps:
     wandb agent <sweep_id>
 """
 import argparse
+import csv
 import json
+import math
+import os
 import random
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -35,6 +39,21 @@ from lakevision.data.transforms import (
     AUGMENTATIONS,
 )
 from lakevision.models.classifier import LakeDrainageClassifier
+from lakevision.models.checkpoint import save_checkpoint, load_checkpoint, describe_checkpoint
+
+
+def git_sha(repo_dir):
+    """Commit SHA for checkpoint provenance. LV_GIT_SHA wins (set it in the
+    sbatch from a login node); otherwise ask git with cwd, not `git -C`, which
+    Sherlock's compute-node git predates."""
+    sha = os.environ.get("LV_GIT_SHA")
+    if sha:
+        return sha
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo_dir),
+                                       stderr=subprocess.DEVNULL, timeout=10).decode().strip()
+    except Exception:
+        return None
 
 
 def set_seed(seed: int):
@@ -180,6 +199,51 @@ def load_labels_essd_5class(csv_paths, id_col='lake_id', label_col='label'):
     return combined
 
 
+def load_soft_labels_essd_5class(csv_paths, class_names, id_col='lake_id', label_col='label'):
+    """Per-lake class-probability vectors from the GUI CSVs' p_<class> columns.
+
+    Returns {lake_id: np.ndarray[num_classes]} in class_names order. A row whose
+    probability columns are missing or do not sum to ~1 falls back to the
+    one-hot of its hard label, so training on soft targets never silently
+    drops a lake the hard-label run would have used.
+    """
+    if isinstance(csv_paths, (str, Path)):
+        csv_paths = [csv_paths]
+    cols = [f"p_{c}" for c in class_names]
+    out, n_soft, n_onehot = {}, 0, 0
+    for csv_path in csv_paths:
+        df = pd.read_csv(csv_path)
+        df = df.dropna(subset=[id_col, label_col])
+        df = df[df[label_col].astype(str).str.strip() != ""]
+        have_cols = all(c in df.columns for c in cols)
+        for _, row in df.iterrows():
+            lid = str(row[id_col])
+            if lid in out:
+                continue
+            lbl = str(row[label_col]).strip()
+            onehot = np.zeros(len(class_names), dtype=np.float32)
+            onehot[class_names.index(lbl)] = 1.0
+            p = None
+            if have_cols:
+                p = np.asarray([row[c] for c in cols], dtype=np.float32)
+                if not np.isfinite(p).all() or abs(p.sum() - 1.0) > 1e-3 or (p < 0).any():
+                    p = None
+            if p is None:
+                out[lid] = onehot; n_onehot += 1
+            else:
+                out[lid] = p; n_soft += 1
+    print(f"\nLoaded soft labels: {n_soft} with probability vectors, {n_onehot} one-hot fallbacks")
+    return out
+
+
+def soft_cross_entropy(logits, target_probs, weight):
+    """-sum_c w_c p_c log softmax(z)_c, normalised by sum_i sum_c w_c p_ic, which
+    reduces to nn.CrossEntropyLoss(weight=w) when every p is one-hot."""
+    logp = torch.log_softmax(logits.float(), dim=1)
+    w = weight.to(logp.device).unsqueeze(0) * target_probs.to(logp.device)
+    return -(w * logp).sum() / w.sum().clamp_min(1e-8)
+
+
 def create_splits(
     labels_csv: str,
     id_col: str = 'new_id',
@@ -293,7 +357,7 @@ def create_splits_fixed_test(
 
 
 def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
-                    accumulation_steps=1, amp=False):
+                    accumulation_steps=1, amp=False, soft_targets=None, class_weights=None):
     """Train for one epoch and return loss + metrics.
 
     Args:
@@ -302,7 +366,12 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
         amp: If True, run forward/backward in bf16 autocast. Halves activation
              memory on A100, enables larger batch sizes. No GradScaler needed
              because bf16 has the same dynamic range as fp32.
+        soft_targets: optional {lake_id: probs[num_classes]}. When given the
+             loss is the weighted soft cross-entropy against those vectors
+             (class_weights required); metrics stay on the hard labels.
     """
+    if soft_targets is not None and class_weights is None:
+        raise ValueError("soft_targets needs class_weights")
     model.train()
     total_loss = 0.0
     n_batches = 0
@@ -315,20 +384,28 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
     amp_dtype = torch.bfloat16 if amp else None
 
     for batch_idx, batch in enumerate(loader):
-        img_seq, area_seq, cloudy_seq, labels, _ = batch
+        img_seq, area_seq, cloudy_seq, labels, lake_ids = batch
 
         img_seq = img_seq.to(device)
         area_seq = area_seq.to(device)
         cloudy_seq = cloudy_seq.to(device)
         labels = labels.to(device)
 
+        if soft_targets is not None:
+            target_probs = torch.from_numpy(np.stack([soft_targets[lid] for lid in lake_ids]))
+            def _loss(logits):
+                return soft_cross_entropy(logits, target_probs, class_weights)
+        else:
+            def _loss(logits):
+                return criterion(logits, labels)
+
         if amp:
             with torch.autocast(device_type='cuda', dtype=amp_dtype):
                 logits = model(img_seq, area_seq, cloudy_seq)
-                loss = criterion(logits, labels)
+                loss = _loss(logits)
         else:
             logits = model(img_seq, area_seq, cloudy_seq)
-            loss = criterion(logits, labels)
+            loss = _loss(logits)
 
         # Scale loss by accumulation steps to maintain proper gradient magnitude
         loss = loss / accumulation_steps
@@ -373,20 +450,27 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
     return avg_loss, metrics
 
 
-def evaluate(model, loader, criterion, device, num_classes=4, amp=False):
-    """Evaluate model and return loss + metrics."""
+def evaluate(model, loader, criterion, device, num_classes=4, amp=False, collect=False):
+    """Evaluate model and return loss + metrics.
+
+    With collect=True the metrics dict also carries per-lake 'lake_ids',
+    'labels', 'preds', 'probs' (and 'attn_weights' when the model has a
+    temporal attention readout), for writing a predictions table.
+    """
     model.eval()
     total_loss = 0.0
     n_batches = 0
 
     all_preds = []
     all_labels = []
+    all_ids, all_probs, all_attn = [], [], []
+    attn_module = getattr(model, 'temporal_attn', None)
 
     amp_dtype = torch.bfloat16 if amp else None
 
     with torch.no_grad():
         for batch in loader:
-            img_seq, area_seq, cloudy_seq, labels, _ = batch
+            img_seq, area_seq, cloudy_seq, labels, lake_ids = batch
 
             img_seq = img_seq.to(device)
             area_seq = area_seq.to(device)
@@ -407,6 +491,11 @@ def evaluate(model, loader, criterion, device, num_classes=4, amp=False):
             preds = torch.argmax(logits, dim=1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
+            if collect:
+                all_ids.extend(list(lake_ids))
+                all_probs.append(torch.softmax(logits.float(), dim=1).cpu().numpy())
+                if attn_module is not None and attn_module.last_weights is not None:
+                    all_attn.append(attn_module.last_weights.float().cpu().numpy())
 
     avg_loss = total_loss / n_batches
 
@@ -427,7 +516,52 @@ def evaluate(model, loader, criterion, device, num_classes=4, amp=False):
         metrics[f'recall_{class_name}'] = recall_score(binary_labels, binary_preds, zero_division=0)
         metrics[f'f1_{class_name}'] = f1_score(binary_labels, binary_preds, zero_division=0)
 
+    if collect:
+        metrics['lake_ids'] = all_ids
+        metrics['labels'] = np.asarray(all_labels)
+        metrics['preds'] = np.asarray(all_preds)
+        metrics['probs'] = np.concatenate(all_probs) if all_probs else np.zeros((0, num_classes))
+        if all_attn:
+            metrics['attn_weights'] = np.concatenate(all_attn)
+
     return avg_loss, metrics
+
+
+def write_predictions_csv(path, metrics, class_names):
+    """lake_id,true_label,pred_label,p_<class>... — the same columns the ESSD
+    inference tables use, so the diagnosis and Terminal-Bench scorers read it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["lake_id", "true_label", "pred_label"] + [f"p_{c}" for c in class_names])
+        for lid, y, p, pr in zip(metrics['lake_ids'], metrics['labels'], metrics['preds'], metrics['probs']):
+            w.writerow([lid, class_names[int(y)] if int(y) >= 0 else "", class_names[int(p)]]
+                       + [f"{float(v):.6f}" for v in pr])
+    if 'attn_weights' in metrics:
+        np.savez_compressed(path.with_suffix('.attn.npz'),
+                            lake_ids=np.asarray(metrics['lake_ids']), weights=metrics['attn_weights'])
+    print(f"Wrote {len(metrics['lake_ids'])} predictions to {path}")
+
+
+def build_lr_schedule(optimizer, schedule, epochs, warmup_epochs, lr, lr_min):
+    """'none' -> None; 'plateau' -> ReduceLROnPlateau (the legacy --use_scheduler);
+    'warmup_cosine' -> linear warm-up over warmup_epochs to lr, then cosine to
+    lr_min at the last epoch. Both are stepped once per epoch."""
+    if schedule == 'none':
+        return None
+    if schedule == 'plateau':
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+    if schedule == 'warmup_cosine':
+        floor = lr_min / lr
+        def factor(epoch):  # epoch = number of completed epochs
+            if epoch < warmup_epochs:
+                return (epoch + 1) / warmup_epochs
+            span = max(1, epochs - warmup_epochs)
+            t = min(1.0, (epoch - warmup_epochs) / span)
+            return floor + (1 - floor) * 0.5 * (1 + math.cos(math.pi * t))
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
+    raise ValueError(f"unknown lr_schedule '{schedule}'")
 
 
 def count_parameters(model):
@@ -483,7 +617,14 @@ def train(config: dict):
     print(f"Learning rate:  {config.get('lr', 1e-4)}")
     print(f"Weight decay:   {config.get('weight_decay', 1e-5)}")
     print(f"AMP (bf16):     {config.get('amp', True)}")
-    print(f"Scheduler:      {config.get('use_scheduler', False)}")
+    lr_schedule = config.get('lr_schedule', 'none')
+    if lr_schedule == 'none' and config.get('use_scheduler', False):
+        lr_schedule = 'plateau'
+    config['lr_schedule'] = lr_schedule
+    print(f"LR schedule:    {lr_schedule}"
+          + (f" (warmup {config.get('warmup_epochs', 10)} epochs, floor {config.get('lr_min', 1e-6)})"
+             if lr_schedule == 'warmup_cosine' else ""))
+    print(f"Soft labels:    {config.get('soft_labels', False)}")
     print(f"Num workers:    {config.get('num_workers', 12)}")
 
     print("\n--- INPUT STREAMS ---")
@@ -496,13 +637,23 @@ def train(config: dict):
     print(f"use_nir:        {config.get('use_nir', False)}")
     print(f"use_swir16:     {config.get('use_swir16', False)}")
 
+    print("\n--- AUX CHANNELS / FILL ---")
+    print(f"validity_channel: {config.get('validity_channel', False)}")
+    print(f"mask_source:      {config.get('mask_source')}")
+    print(f"fill:             {config.get('fill', 'zero')}")
+
     print("\n--- MODEL ARCHITECTURE ---")
     print(f"seq_len:              {config.get('seq_len', 153)}")
     print(f"num_classes:          {config.get('num_classes', 5)}")
     print(f"attention_type:       {config.get('attention_type', 'none')}")
     print(f"frontcnn_base_ch:     {config.get('frontcnn_base_channels', 8)}")
     print(f"frontcnn_num_layers:  {config.get('frontcnn_num_layers', 4)}")
+    print(f"frontcnn_norm:        {config.get('frontcnn_norm', 'none')}")
+    print(f"frontcnn_chunk_size:  {config.get('frontcnn_chunk_size')}")
     print(f"clstm_hidden:         {config.get('clstm_hidden', 32)}")
+    print(f"clstm_forget_bias:    {config.get('clstm_forget_bias', 0.0)}")
+    print(f"temporal_readout:     {config.get('temporal_readout', 'last')}")
+    print(f"pool_type:            {config.get('pool_type', 'avg')}")
     print(f"slstm_hidden:         {config.get('slstm_hidden', 16)}")
     print(f"classhead_hidden:     {config.get('classhead_hidden', 64)}")
     print(f"classhead_dropout:    {config.get('classhead_dropout', 0.3)}")
@@ -711,6 +862,21 @@ def train(config: dict):
     for i, name in enumerate(CLASS_NAMES[:num_classes]):
         print(f"  {name} ({i}): count={label_counts.get(i, 0)}, weight={class_weights[i]:.3f}")
 
+    # Soft targets (R8): per-lake probability vectors from the same CSVs.
+    soft_targets = None
+    if config.get("soft_labels", False):
+        if label_mode != "essd_5class" or merge_classes is not None:
+            raise ValueError("--soft_labels needs label_mode essd_5class without --merge_classes")
+        csvs = list(config["labels_csv"]) if isinstance(config["labels_csv"], list) else [config["labels_csv"]]
+        if config.get("test_labels_csv"):
+            csvs += list(config["test_labels_csv"])
+        soft_targets = load_soft_labels_essd_5class(
+            csvs, CLASS_NAMES[:num_classes],
+            id_col=config.get("id_col", "lake_id"), label_col=config.get("label_col", "label"))
+        missing = [lid for lid in train_ids if lid not in soft_targets]
+        if missing:
+            raise ValueError(f"{len(missing)} train lakes have no soft label, e.g. {missing[:3]}")
+
     # Dataset configuration
     dataset_kwargs = {
         'seq_len': config.get("seq_len", 153),
@@ -719,17 +885,10 @@ def train(config: dict):
         'use_mask': not config.get("no_mask", False),
         'band_stats': config.get("band_stats"),
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
+        'validity_channel': config.get("validity_channel", False),
+        'fill': config.get("fill", "zero"),
+        'mask_source': config.get("mask_source"),
     }
-
-    # Print the channel list once (was printed 3x by LakeDataset.__init__).
-    channels_to_load = ['red', 'green', 'blue']
-    if dataset_kwargs['use_nir']:
-        channels_to_load.append('nir')
-    if dataset_kwargs['use_swir16']:
-        channels_to_load.append('swir16')
-    if dataset_kwargs['use_mask']:
-        channels_to_load.append('mask')
-    print(f"\nLoading {len(channels_to_load)} channels from NC files: {channels_to_load}")
 
     # Pass labels: use remapped dict if available, otherwise read from CSV
     if labels_dict is not None:
@@ -744,6 +903,12 @@ def train(config: dict):
     train_dataset = LakeDataset(train_paths, preload_to_ram=preload_to_ram, **dataset_kwargs)
     val_dataset = LakeDataset(val_paths, preload_to_ram=False, **dataset_kwargs)
     test_dataset = LakeDataset(test_paths, preload_to_ram=False, **dataset_kwargs)
+    n_input_channels = train_dataset.n_channels
+    n_aux_channels = train_dataset.n_aux_channels
+    channels_to_load = (train_dataset.channels_to_load[:train_dataset.n_spectral_channels]
+                        + train_dataset.aux_channel_names
+                        + (['mask'] if dataset_kwargs['use_mask'] else []))
+    print(f"\nModel input: {n_input_channels} channels {channels_to_load}")
 
     # Wrap training set with augmentations if requested.
     # Default is random-per-epoch (one disk read per lake per epoch). The
@@ -843,12 +1008,19 @@ def train(config: dict):
         use_nir=config.get("use_nir", False),
         use_swir16=config.get("use_swir16", False),
         attention_type=config.get("attention_type", "none"),
+        n_aux_channels=n_aux_channels,
+        expect_channels=n_input_channels,
         num_classes=num_classes,
         frontcnn_base_channels=config.get("frontcnn_base_channels", 8),
         frontcnn_num_layers=config.get("frontcnn_num_layers", 4),
         frontcnn_out_hw=config.get("frontcnn_out_hw"),
+        frontcnn_norm=config.get("frontcnn_norm", "none"),
+        frontcnn_norm_groups=config.get("frontcnn_norm_groups", 8),
+        frontcnn_chunk_size=config.get("frontcnn_chunk_size"),
         clstm_hidden=config.get("clstm_hidden", 32),
         clstm_kernel=config.get("clstm_kernel", 3),
+        clstm_forget_bias=config.get("clstm_forget_bias", 0.0),
+        temporal_readout=config.get("temporal_readout", "last"),
         slstm_hidden=config.get("slstm_hidden", 16),
         slstm_num_layers=config.get("slstm_num_layers", 1),
         slstm_dropout=config.get("slstm_dropout", 0.0),
@@ -875,12 +1047,22 @@ def train(config: dict):
     )
 
     # ESSD baseline uses a fixed learning rate (no scheduler) by default.
-    # The --use_scheduler flag remains available for ablation experiments.
-    scheduler = None
-    if config.get("use_scheduler", False):
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5
-        )
+    scheduler = build_lr_schedule(
+        optimizer, lr_schedule, config.get("epochs", 400),
+        config.get("warmup_epochs", 10), config.get("lr", 1e-4), config.get("lr_min", 1e-6))
+
+    # Provenance written into every checkpoint.
+    repo_dir = Path(__file__).resolve().parents[2]
+    sha = git_sha(repo_dir)
+    run_id = (wandb.run.id if WANDB_AVAILABLE and wandb.run is not None else None)
+    ckpt_config = {k: (list(v) if isinstance(v, tuple) else v) for k, v in config.items()
+                   if isinstance(v, (str, int, float, bool, tuple, list, type(None)))}
+    def _meta(epoch, val_metrics):
+        return {"config": ckpt_config, "epoch": epoch, "git_sha": sha, "wandb_run_id": run_id,
+                "seed": seed, "class_names": list(CLASS_NAMES[:num_classes]), "num_classes": num_classes,
+                "metrics": {k: float(v) for k, v in val_metrics.items()
+                            if isinstance(v, (int, float, np.floating))}}
+    print(f"Git SHA: {sha}")
 
     # Training loop
     best_val_loss = float("inf")
@@ -921,14 +1103,20 @@ def train(config: dict):
 
         accumulation_steps = config.get("accumulation_steps", 1)
         amp = config.get("amp", False)
-        train_loss, train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps, amp=amp)
+        train_loss, train_metrics = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps,
+            amp=amp, soft_targets=soft_targets, class_weights=class_weights)
         val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes, amp=amp)
 
         epoch_time = time.time() - epoch_start_time
         epoch_times.append(epoch_time)
+        peak_gpu_gb = (torch.cuda.max_memory_allocated() / 2**30) if torch.cuda.is_available() else 0.0
 
-        if scheduler:
-            scheduler.step(val_loss)
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
 
         # Logging
         log_dict = {
@@ -945,6 +1133,7 @@ def train(config: dict):
             "val_f1_macro": val_metrics["f1_macro"],
             "lr": optimizer.param_groups[0]["lr"],
             "epoch_time_sec": epoch_time,
+            "peak_gpu_gb": peak_gpu_gb,
         }
 
         # Per-class metrics
@@ -959,7 +1148,8 @@ def train(config: dict):
         eta_str = f"{int(eta_seconds // 3600)}h {int((eta_seconds % 3600) // 60)}m"
 
         # Print epoch summary
-        print(f"\nEpoch {epoch+1}/{epochs} | Time: {epoch_time:.1f}s | ETA: {eta_str}")
+        print(f"\nEpoch {epoch+1}/{epochs} | Time: {epoch_time:.1f}s | ETA: {eta_str} | "
+              f"peak GPU {peak_gpu_gb:.1f} GB | lr {optimizer.param_groups[0]['lr']:.2e}")
         print(f"  {'':12} {'Loss':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8}")
         print(f"  {'Train':12} {train_loss:>8.4f} {train_metrics['accuracy']:>8.3f} {train_metrics['precision_macro']:>8.3f} {train_metrics['recall_macro']:>8.3f} {train_metrics['f1_macro']:>8.3f}")
         print(f"  {'Val':12} {val_loss:>8.4f} {val_metrics['accuracy']:>8.3f} {val_metrics['precision_macro']:>8.3f} {val_metrics['recall_macro']:>8.3f} {val_metrics['f1_macro']:>8.3f}")
@@ -986,7 +1176,7 @@ def train(config: dict):
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             if best_loss_path is not None:
-                torch.save(model.state_dict(), best_loss_path)
+                save_checkpoint(best_loss_path, model, _meta(epoch + 1, val_metrics))
                 print(f"  Saved best-val-loss model (val_loss={val_loss:.4f})")
 
         # 2. Best val macro F1 (separate file)
@@ -994,14 +1184,14 @@ def train(config: dict):
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
             if best_f1_path is not None:
-                torch.save(model.state_dict(), best_f1_path)
+                save_checkpoint(best_f1_path, model, _meta(epoch + 1, val_metrics))
                 print(f"  Saved best-val-F1 model (val_f1_macro={val_f1:.4f})")
 
         # 3. Periodic snapshot every N epochs (for post-hoc analysis)
         epoch_1indexed = epoch + 1
         if epoch_1indexed % periodic_every == 0 and best_loss_path is not None:
             periodic = _periodic_path(epoch_1indexed)
-            torch.save(model.state_dict(), periodic)
+            save_checkpoint(periodic, model, _meta(epoch + 1, val_metrics))
             print(f"  Saved periodic snapshot: {periodic.name}")
 
     # Training timing summary
@@ -1026,12 +1216,20 @@ def train(config: dict):
         persistent_workers=False,  # one-shot eval; no benefit from persistence
     )
 
-    # Load best model for test evaluation
-    if config.get("save_path") and Path(config["save_path"]).exists():
-        model.load_state_dict(torch.load(config["save_path"], map_location=device))
-        print("Loaded best model for test evaluation")
+    # Load the selected checkpoint for test evaluation: best val loss (ESSD
+    # default) or best val macro-F1 (--test_checkpoint f1, the selection rule
+    # the ESSD headline numbers actually used).
+    which = config.get("test_checkpoint", "loss")
+    test_ckpt = best_f1_path if which == "f1" else best_loss_path
+    if test_ckpt is not None and Path(test_ckpt).exists():
+        state, meta = load_checkpoint(test_ckpt, map_location=device)
+        model.load_state_dict(state)
+        print(f"Loaded best-val-{which} model for test evaluation: {describe_checkpoint(test_ckpt, meta)}")
 
-    test_loss, test_metrics = evaluate(model, test_loader, criterion, device, num_classes, amp=config.get("amp", False))
+    test_loss, test_metrics = evaluate(model, test_loader, criterion, device, num_classes,
+                                       amp=config.get("amp", False), collect=True)
+    if config.get("test_predictions_csv"):
+        write_predictions_csv(config["test_predictions_csv"], test_metrics, CLASS_NAMES[:num_classes])
 
     print(f"\nTest Results:")
     print(f"  Loss:      {test_loss:.4f}")
@@ -1130,7 +1328,16 @@ def main():
                         help="Disable bf16 AMP (forces fp32 training)")
     parser.add_argument("--use_scheduler", action="store_true",
                         help="Enable ReduceLROnPlateau LR scheduler "
-                             "(off by default in ESSD baseline).")
+                             "(off by default in ESSD baseline). Same as --lr_schedule plateau.")
+    parser.add_argument("--lr_schedule", type=str, default="none",
+                        choices=["none", "plateau", "warmup_cosine"],
+                        help="'none' (ESSD: fixed lr), 'plateau', or 'warmup_cosine' "
+                             "(linear warm-up over --warmup_epochs, cosine to --lr_min at the last epoch).")
+    parser.add_argument("--warmup_epochs", type=int, default=10)
+    parser.add_argument("--lr_min", type=float, default=1e-6)
+    parser.add_argument("--soft_labels", action="store_true", default=False,
+                        help="Train on the p_<class> probability columns of the label CSVs "
+                             "(weighted soft cross-entropy). Metrics stay on hard labels.")
     parser.add_argument("--host_mem_budget_gb", type=float, default=None,
                         help="RAM the DataLoader queue may occupy, in GB. When "
                              "set, num_workers is chosen so that "
@@ -1211,6 +1418,14 @@ def main():
                         help="Include SWIR16 band")
     parser.add_argument("--no_mask", action="store_true", default=False,
                         help="Disable mask band (required for raw sat-tile-stack NC files)")
+    parser.add_argument("--validity_channel", action="store_true", default=False,
+                        help="Append a per-pixel observed flag (1 where red was finite) as an input channel.")
+    parser.add_argument("--fill", type=str, default="zero", choices=["zero", "mean"],
+                        help="NaN pixel fill: 'zero' (ESSD) or 'mean' (band mean from --band_stats).")
+    parser.add_argument("--mask_source", type=str, default=None,
+                        choices=["static", "dynamic", "both"],
+                        help="Deposit masks to append as input channels: lake_boundary (static), "
+                             "water_mask_ndwi (dynamic) or both.")
 
     # Model architecture
     parser.add_argument("--attention_type", type=str, default="none",
@@ -1229,7 +1444,22 @@ def main():
                              "The ESSD baselines ran '64,64' with 4 layers, which "
                              "upsampled 32->64 and cost 4x in the CLSTM for no "
                              "gain; pass '64,64' only to reproduce those runs.")
+    parser.add_argument("--frontcnn_norm", type=str, default="none", choices=["none", "group"],
+                        help="Normalisation after each FrontCNN conv ('none' = ESSD).")
+    parser.add_argument("--frontcnn_norm_groups", type=int, default=8)
+    parser.add_argument("--frontcnn_chunk_size", type=int, default=None,
+                        help="Run the conv stack over slices of B*T frames; with "
+                             "--gradient_checkpointing each slice is checkpointed separately, "
+                             "which is what actually bounds peak memory. Not a scientific variable.")
     parser.add_argument("--clstm_hidden", type=int, default=32)
+    parser.add_argument("--clstm_forget_bias", type=float, default=0.0,
+                        help="Initial ConvLSTM forget-gate bias (0.0 = ESSD; 1.0 = remember by default).")
+    parser.add_argument("--temporal_readout", type=str, default="last",
+                        choices=["last", "mean", "max", "attn"],
+                        help="How the hidden sequence collapses: last step (ESSD), mean/max over "
+                             "time, or learned attention over time with missing days masked.")
+    parser.add_argument("--pool_type", type=str, default="avg", choices=["avg", "max", "both"],
+                        help="Spatial pooling of the hidden map ('both' concatenates avg and max).")
     parser.add_argument("--slstm_hidden", type=int, default=16)
     parser.add_argument("--classhead_hidden", type=int, default=64)
     parser.add_argument("--classhead_dropout", type=float, default=0.3)
@@ -1245,6 +1475,12 @@ def main():
     # Output
     parser.add_argument("--save_path", type=str, default=None,
                         help="Path to save best model weights")
+    parser.add_argument("--test_checkpoint", type=str, default="loss", choices=["loss", "f1"],
+                        help="Which checkpoint scores the test set: best val loss (ESSD default) "
+                             "or best val macro-F1.")
+    parser.add_argument("--test_predictions_csv", type=str, default=None,
+                        help="Write per-lake test predictions (lake_id,true_label,pred_label,p_*) here; "
+                             "attention weights go beside it as .attn.npz when the readout is 'attn'.")
 
     # Wandb
     parser.add_argument("--wandb_project", type=str, default="lake-vision")

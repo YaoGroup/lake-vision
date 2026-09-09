@@ -23,6 +23,11 @@ https://claude.ai/code/artifact/1ce47cc8-92e4-4be1-8839-302d482b99da
 | `bench_costs.json` | the bench output the page quotes (ESSD as published 225 GFLOP/lake; R0 121; R10 150; R9 451) |
 | `mem_bench.py` | saved-for-backward bytes per run under bf16 autocast, scaled to batch 8 × 153 frames; run from the repo root with the `lakevision` env |
 | `mem_costs.json` | the bench output the page quotes (R0 28 GB, R2 38, R10 48, R9 51 at batch 8; halve for batch 4) |
+| `../../engine/training/eleven_runs_matrix.sh` | the flag matrix, one place, sourced by the gate and the sbatch |
+| `../../engine/training/smoke_eleven_runs_local.sh` | local gate: all eleven configs, 2 epochs, twelve local stacks, CPU |
+| `../../engine/training/run_eleven_runs.sh` | the sbatch array (two submissions: 40 GB and 80 GB A100s; `SMOKE=1` for the 50-lake smoke job) |
+| `../../engine/training/run_band_stats_crossyear.sh` | CPU job that writes the training-split band statistics R3 and R10 need |
+| `../../engine/eval/score_tbs40.py` | scores a predictions table on the 40 Terminal-Bench lakes |
 | `diagnosis_numbers.py` | reproduces the diagnosis numbers from published tables and local copies: the 679-lake confusion, the Terminal-Bench 40 (unanimity 27/40, labeler and model scores), the combined model's split leakage, missing-day statistics |
 
 ## The runs, in one line each

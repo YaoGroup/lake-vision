@@ -363,16 +363,16 @@
   </ul>
 
   <h3>The run matrix</h3>
-  <p>All eleven share the template's data, split and label arguments and all eleven pass <span class="mono">--host_mem_budget_gb 200</span>; R2, R9 and R10 go up as a second array on 80 GB A100s (see <em>Memory, measured</em>). Only these flags differ. Every run also logs train macro-F1 per epoch and scores the 40 Terminal-Bench lakes at the end with the task's verifier.</p>
+  <p>All eleven share the template's data, split and label arguments and all eleven pass <span class="mono">--no_mask --test_checkpoint f1 --test_predictions_csv</span> (deposit stacks have no mask band; the test set is scored with the best-val-F1 checkpoint, the ESSD selection rule, and every run writes a per-lake predictions table) plus <span class="mono">--host_mem_budget_gb</span>; R2, R9 and R10 go up as a second array on 80 GB A100s (see <em>Memory, measured</em>). The matrix lives in <span class="mono">engine/training/eleven_runs_matrix.sh</span>, sourced by the local gate and the sbatch. Only these flags differ. Every run also logs train macro-F1 per epoch and scores the 40 Terminal-Bench lakes at the end with the task's verifier.</p>
   <div class="fig"><table>
     <thead><tr><th>run</th><th>flags beyond the template</th></tr></thead>
     <tbody>
       <tr><td class="id">R0</td><td class="mono">(none: 32×32 is main's default)</td></tr>
       <tr><td class="id">R1</td><td class="mono">--temporal_readout attn --pool_type both</td></tr>
-      <tr><td class="id">R2</td><td class="mono">--frontcnn_norm group --clstm_forget_bias 1.0 --use_scheduler --warmup_epochs 10</td></tr>
+      <tr><td class="id">R2</td><td class="mono">--frontcnn_norm group --clstm_forget_bias 1.0 --lr_schedule warmup_cosine --warmup_epochs 10</td></tr>
       <tr><td class="id">R3</td><td class="mono">--band_stats band_stats_crossyear_train.json --fill mean --validity_channel</td></tr>
       <tr><td class="id">R4</td><td class="mono">--use_cloudyseq --cloudy_seq_var observed</td></tr>
-      <tr><td class="id">R5</td><td class="mono">--mask_as_channel --mask_source both</td></tr>
+      <tr><td class="id">R5</td><td class="mono">--mask_source both</td></tr>
       <tr><td class="id">R6</td><td class="mono">--attention_type spatial</td></tr>
       <tr><td class="id">R7</td><td class="mono">--use_nir --use_swir16</td></tr>
       <tr><td class="id">R8</td><td class="mono">--soft_labels</td></tr>
