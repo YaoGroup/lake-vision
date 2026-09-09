@@ -26,8 +26,10 @@ from pathlib import Path
 import netCDF4
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from lakevision.data.datasets import LakeDataset  # noqa: E402  (BAND_TO_CHANNEL)
+# Same map as LakeDataset.BAND_TO_CHANNEL, inlined so this CPU-only job never
+# imports the package (whose __init__ pulls in torch).
+BAND_TO_CHANNEL = {'B04': 'red', 'B03': 'green', 'B02': 'blue',
+                   'B08': 'nir', 'B11': 'swir16', 'B12': 'swir22'}
 
 
 def band_names(nc):
@@ -38,7 +40,7 @@ def band_names(nc):
                for row in nc.variables['band_name'][:]]
     else:
         raw = [_decode(b) for b in nc.variables['band'][:]]
-    return [LakeDataset.BAND_TO_CHANNEL.get(b, b) for b in raw]
+    return [BAND_TO_CHANNEL.get(b, b) for b in raw]
 
 
 def main():
