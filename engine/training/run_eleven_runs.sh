@@ -49,6 +49,8 @@ ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10)
 RUN="${ARRAY_RUNS[$SLURM_ARRAY_TASK_ID]}"
 SMOKE="${SMOKE:-0}"
 MEM_BUDGET="${MEM_BUDGET:-166}"     # ~65% of --mem, the loader queue's share
+EPOCHS="${EPOCHS:-400}"             # override per submission, e.g. --export=ALL,EPOCHS=350
+NUM_WORKERS="${NUM_WORKERS:-12}"    # raise together with --cpus-per-task
 
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
@@ -64,7 +66,7 @@ source "$REPO_DIR/engine/training/eleven_runs_matrix.sh"
 if [ "$SMOKE" = "1" ]; then
     TAG="eleven_smoke"; EXTRA="--epochs 5 --max_lakes 50"
 else
-    TAG="eleven"; EXTRA=""
+    TAG="eleven"; EXTRA="--epochs $EPOCHS"
 fi
 MODELS_DIR="$SHERLOCK_DIR/models/$TAG"
 PRED_DIR="$SHERLOCK_DIR/inference_essd/$TAG"
@@ -139,7 +141,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --train_ids_file "$SPLITS_DIR/train_ids.json" \
     --val_ids_file "$SPLITS_DIR/val_ids.json" \
     --test_ids_file "$SPLITS_DIR/test_ids.json" \
-    --host_mem_budget_gb "$MEM_BUDGET" \
+    --host_mem_budget_gb "$MEM_BUDGET" --num_workers "$NUM_WORKERS" \
     --wandb_name "${TAG}_${RUN}" \
     --save_path "$SAVE_PATH" \
     --test_predictions_csv "$PRED_CSV" \

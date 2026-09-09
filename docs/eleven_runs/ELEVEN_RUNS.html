@@ -408,6 +408,26 @@
   <p><strong>The fix is an 80 GB A100 for R2, R9 and R10, at batch 8 like everything else.</strong> They fit with 30 GB to spare and the ESSD configuration is untouched. The constraint has to name both features, <span class="mono">-C "GPU_SKU:A100_SXM4&amp;GPU_MEM:80GB"</span>: <span class="mono">GPU_MEM:80GB</span> alone is how the last attempt ended up on an H100. A constraint cannot vary inside one array, so the eleven go up as two arrays, eight runs on 40 GB cards and three on 80 GB. Verified 2026-09-08: serc has six 80 GB A100 nodes (<span class="mono">sh03-17n01/03/05/07</span> with 8 GPUs each, <span class="mono">sh03-18n11/16</span> with 4) and one H100 node, <span class="mono">sh04-09n01</span>, which is where the previous constraint sent the run. Check availability on the day with <span class="mono">sinfo -p serc -N -h -o "%N|%G|%f" | grep GPU_MEM:80GB</span>; the fallback that needs no special node is <span class="mono">--batch_size 4 --accumulation_steps 2</span>, which halves every number in the table and, with no BatchNorm in the model, gives the same gradient as batch 8 from the same sampler order. Either way pass <span class="mono">--host_mem_budget_gb 200</span>: at 8 input channels a sample is 1.3 GB and 12 workers × 2 prefetch × batch 8 is 246 GB, right at the template's 256 GB and enough to get R10 killed by the cgroup rather than the GPU. The three big runs should also ask for <span class="mono">--mem 320GB</span>, as the earlier high-capacity scripts did.</p>
   <p>Wall clock is the other hard limit. At 14.5 minutes an epoch the healthy runs projected 100 h for 400 epochs and were killed at 72 h; the best-F1 checkpoint is written as it improves, so a killed run still leaves a usable model, but it does not leave a clean stop. Either accept about 290 epochs or pass <span class="mono">--epochs 290</span> so every run ends the same way. Log <span class="mono">torch.cuda.max_memory_allocated()</span> once per epoch; the smoke job reads it against this table.</p>
 
+  <h3 style="margin-top:22px">Smoke job, measured (2026-09-08 night, array 42537580)</h3>
+  <p>All eleven ran 5 epochs on 50 lakes per split on 80 GB A100s, exit code 0, 50 test predictions each, band statistics read by R3 and R10. Peak memory is <span class="mono">torch.cuda.max_memory_allocated</span>. The bench above was right for every run without GroupNorm and wrong for R2 and R10: CUDA autocast runs GroupNorm in fp32, so everything downstream of each norm in the front CNN is stored at twice the width. R10 still fits an 80 GB card with 11 GB to spare. Epoch time is the loader's, as before; the full split is 1,000 lakes per epoch against the smoke's 100, so the projection is ten times the smoke epoch, and the last column is what 72 h buys.</p>
+  <div class="fig"><table>
+    <thead><tr><th>run</th><th>peak GB</th><th>smoke epoch s</th><th>full epoch min</th><th>epochs in 72 h</th></tr></thead>
+    <tbody>
+      <tr><td class="id">R0</td><td>26.7</td><td>74</td><td>12</td><td>352</td></tr>
+      <tr><td class="id">R1</td><td>30.1</td><td>74</td><td>12</td><td>349</td></tr>
+      <tr><td class="id">R2</td><td>54.1</td><td>77</td><td>13</td><td>334</td></tr>
+      <tr><td class="id">R3</td><td>28.5</td><td>90</td><td>15</td><td>288</td></tr>
+      <tr><td class="id">R4</td><td>26.7</td><td>74</td><td>12</td><td>352</td></tr>
+      <tr><td class="id">R5</td><td>30.3</td><td>104</td><td>17</td><td>248</td></tr>
+      <tr><td class="id">R6</td><td>26.9</td><td>69</td><td>12</td><td>374</td></tr>
+      <tr><td class="id">R7</td><td>30.3</td><td>115</td><td>19</td><td>225</td></tr>
+      <tr><td class="id">R8</td><td>26.7</td><td>73</td><td>12</td><td>355</td></tr>
+      <tr><td class="id">R9</td><td>48.1</td><td>88</td><td>15</td><td>294</td></tr>
+      <tr><td class="id">R10</td><td>68.8</td><td>170</td><td>28</td><td>152</td></tr>
+    </tbody>
+  </table>
+  <div class="small">R10's loader carries eight channels and the memory plan trims its workers to fit 208 GB, hence 2.3× R0. At 72 h the two cosine runs, R2 and R10, would be killed before their schedules finish, so either the wall time goes up or their <span class="mono">--epochs</span> comes down to what fits (<span class="mono">EPOCHS=</span> in the sbatch export).</div></div>
+
   <h3 style="margin-top:22px">Gate before the real submission</h3>
   <ul>
     <li>All eleven configurations run 2 epochs on the twelve local stacks on the Mac (CPU, batch 1: the Mac has 17 GB) and produce a finite loss. This catches shape and flag errors in minutes.</li>
