@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from .blocks import FrontCNN, ScalarLSTM, ClassHeadMLP, GlobalPooling
+from .blocks import FrontCNN, ScalarLSTM, ClassHeadMLP, GlobalPooling, TemporalAttentionPool
 from .clstm import CLSTM
 from .attention import SpatialCBAM, FullCBAM
 
@@ -49,6 +49,13 @@ class LakeDrainageClassifier(nn.Module):
             - 'full': full CBAM (channel + spatial)
             - 'arch': architectural attention, dual pathway with lake mask
             default: 'none'
+        n_aux_channels          (int): number of non-spectral channels the dataset appends AFTER
+                                        the spectral bands and BEFORE any legacy trailing mask
+                                        (validity flag, static outline, daily water mask). They
+                                        are fed to FrontCNN as real input channels. (default: 0)
+        expect_channels         (int or None): when set, forward() asserts x has exactly this many
+                                        channels, so a mis-specified band list crashes on the
+                                        first batch instead of silently slicing channels off.
         num_classes             (int): number of output classes (default: 4)
         input_H                 (int): input image height (default: 512)
         input_W                 (int): input image width (default: 512)
@@ -66,8 +73,24 @@ class LakeDrainageClassifier(nn.Module):
                                         expensive for no gain. To reproduce those runs bit-for-bit, pass
                                         frontcnn_out_hw=(64,64) explicitly (see docs/PROVENANCE_ESSD.md).
         frontcnn_pool           (str): pooling type for FrontCNN ('max, 'avg', 'none') (default: 'max')
+        frontcnn_norm           (str): 'none' (default, ESSD-identical) or 'group': GroupNorm after
+                                        each conv. Immune to batch size and to checkpointing.
+        frontcnn_norm_groups    (int): groups for GroupNorm, clamped to the channel count (default: 8)
+        frontcnn_chunk_size     (int or None): run the conv stack over slices of the B*T axis.
+                                        Exact. With gradient_checkpointing=True each chunk is
+                                        checkpointed separately, which makes peak activation memory
+                                        one chunk's worth; checkpointing the whole FrontCNN does
+                                        not buy that. Not a scientific variable. (default: None)
         clstm_hidden            (int): hidden channels for CLSTM (default: 32)
         clstm_kernel            (int): kernel size for CLSTM (default: 3)
+        clstm_forget_bias       (float): initial forget-gate bias (default: 0.0 = ESSD). 1.0 keeps
+                                        the cell from decaying ~0.5/step early in training.
+        temporal_readout        (str): how the CLSTM hidden sequence collapses to one vector:
+                                        'last' (default, ESSD: final step only), 'mean' or 'max'
+                                        over T, or 'attn': pool every step spatially, score each
+                                        with one Linear, softmax over T with missing days masked,
+                                        weighted sum. The weights land on
+                                        ``self.temporal_attn.last_weights``.
         slstm_hidden            (int): hidden dimension for scalar LSTMs (default: 16)
         slstm_num_layers        (int): number of layers for scalar LSTMs (default: 1)
         slstm_dropout           (float): dropout for scalar LSTMs (default: 0.0)
@@ -125,6 +148,9 @@ class LakeDrainageClassifier(nn.Module):
         use_swir22=False,
         # attention configuration
         attention_type='none',
+        # non-spectral input channels appended by the dataset
+        n_aux_channels=0,
+        expect_channels=None,
         # classification and imagery configuration (these may not change)
         num_classes=4,
         input_H=512,
@@ -134,9 +160,14 @@ class LakeDrainageClassifier(nn.Module):
         frontcnn_num_layers=4,
         frontcnn_out_hw=None,
         frontcnn_pool='max',
+        frontcnn_norm='none',
+        frontcnn_norm_groups=8,
+        frontcnn_chunk_size=None,
         # CLSTM configuration
         clstm_hidden=32,
         clstm_kernel=3,
+        clstm_forget_bias=0.0,
+        temporal_readout='last',
         # scalar LSTM configuration
         slstm_hidden=16,
         slstm_num_layers=1,
@@ -168,6 +199,17 @@ class LakeDrainageClassifier(nn.Module):
         self.attention_type = attention_type.lower()
         self.pool_type = pool_type
         self.gradient_checkpointing = gradient_checkpointing
+
+        valid_readout = ['last', 'mean', 'max', 'attn']
+        if temporal_readout not in valid_readout:
+            raise ValueError(f"Invalid temporal_readout '{temporal_readout}'. "
+                             f"Must be one of {valid_readout}.")
+        self.temporal_readout = temporal_readout
+
+        if n_aux_channels < 0:
+            raise ValueError(f"n_aux_channels must be >= 0, got {n_aux_channels}")
+        self.n_aux_channels = n_aux_channels
+        self.expect_channels = expect_channels
 
         # Calculate number of imagery channels (RGB + optional spectral bands)
         # Mask is handled separately in the forward pass
@@ -202,13 +244,21 @@ class LakeDrainageClassifier(nn.Module):
             # or spatial mode (larger output -> ConvLSTM)
             self.use_vector_lstm = (self.effective_hw == (1, 1))
 
-            # (1) FrontCNN for imagery (RGB + optional spectral bands)
+            # (1) FrontCNN for imagery (RGB + optional spectral bands + aux channels)
             self.frontcnn = FrontCNN(
-                in_channels=self.n_imagery_channels,
+                in_channels=self.n_imagery_channels + n_aux_channels,
                 base_channels=frontcnn_base_channels,
                 num_layers=frontcnn_num_layers,
                 out_hw=frontcnn_out_hw,
                 pool=frontcnn_pool,
+                norm=frontcnn_norm,
+                norm_groups=frontcnn_norm_groups,
+                chunk_size=frontcnn_chunk_size,
+                # Per-chunk checkpointing is what makes peak memory batch-size
+                # independent; when it is on, the whole-segment wrap in forward()
+                # is skipped (it would rebuild every chunk at once in backward).
+                checkpoint_chunks=(gradient_checkpointing
+                                   and frontcnn_chunk_size is not None),
             )
             frontcnn_out_channels = self.frontcnn.output_channels
 
@@ -237,6 +287,11 @@ class LakeDrainageClassifier(nn.Module):
                     num_layers=frontcnn_num_layers,
                     out_hw=frontcnn_out_hw,
                     pool=frontcnn_pool,
+                    norm=frontcnn_norm,
+                    norm_groups=frontcnn_norm_groups,
+                    chunk_size=frontcnn_chunk_size,
+                    checkpoint_chunks=(gradient_checkpointing
+                                       and frontcnn_chunk_size is not None),
                 )
             else: # no attention
                 self.attention = nn.Identity()
@@ -255,14 +310,21 @@ class LakeDrainageClassifier(nn.Module):
                 self.img_lstm_hidden = clstm_hidden
             else:
                 # Spatial mode: use ConvLSTM
+                # return_sequence only when the readout consumes more than the
+                # final state; at 'last' stacking 153 hidden states just to index
+                # [-1] is wasted memory.
                 self.clstm = CLSTM(
                     input_channels=frontcnn_out_channels,
                     hidden_channels=clstm_hidden,
                     kernel_size=clstm_kernel,
-                    return_sequence=True,
+                    return_sequence=(temporal_readout != 'last'),
+                    forget_bias=clstm_forget_bias,
                 )
                 # (4) GLOBAL POOLING (only needed for spatial mode)
                 self.global_pool = GlobalPooling(pool_type=pool_type)
+                if temporal_readout == 'attn':
+                    self.temporal_attn = TemporalAttentionPool(
+                        clstm_hidden * (2 if pool_type == 'both' else 1))
 
         # == SCALAR TIME SEQUENCE PROCESSING == #
         # separate LSTM for each scalar sequence
@@ -335,13 +397,27 @@ class LakeDrainageClassifier(nn.Module):
 
         # == IMAGE SEQUENCE PROCESSING == #
         if self.use_imgseq:
-            # split the imagery channels and mask
-            # Imagery is all channels except the last one (mask)
-            imagery = x[:, :, :self.n_imagery_channels, :, :]  # [B, T, n_imagery_channels, H, W]
-            mask = x[:, :, self.n_imagery_channels:, :, :]     # [B, T, 1, H, W]
+            # Channel-count check. Too few channels always crashed; too MANY were
+            # silently sliced off, so a "6-band" run could quietly train on 3.
+            if self.expect_channels is not None and x.shape[2] != self.expect_channels:
+                raise RuntimeError(
+                    f"Input has {x.shape[2]} channels but the model expects "
+                    f"{self.expect_channels} ({self.n_imagery_channels} spectral + "
+                    f"{self.n_aux_channels} aux"
+                    f"{' + trailing mask' if self.expect_channels > self.n_imagery_channels + self.n_aux_channels else ''}). "
+                    f"Check band / aux-channel flags.")
 
-            # process imagery through FrontCNN
-            if self.gradient_checkpointing and self.training:
+            # Channel layout: [spectral..., aux..., legacy mask]. Spectral and aux
+            # channels feed FrontCNN; the legacy trailing mask is consumed only by
+            # attention_type='arch' and discarded otherwise (ESSD behaviour).
+            n_in = self.n_imagery_channels + self.n_aux_channels
+            imagery = x[:, :, :n_in, :, :]   # [B, T, n_in, H, W]
+            mask = x[:, :, n_in:, :, :]      # [B, T, 0 or 1, H, W]
+
+            # process imagery through FrontCNN. When FrontCNN checkpoints its own
+            # chunks, wrapping it again would defeat the point.
+            if (self.gradient_checkpointing and self.training
+                    and not self.frontcnn.checkpoint_chunks):
                 img_features = checkpoint(self.frontcnn, imagery, use_reentrant=False)
             else:
                 img_features = self.frontcnn(imagery)   # [B, T, C, Hf, Wf]
@@ -362,7 +438,8 @@ class LakeDrainageClassifier(nn.Module):
                 # apply attention
                 if self.attention_type == 'arch':
                     # architectural attention fusion between separate mask pathway and imagery pathway
-                    if self.gradient_checkpointing and self.training:
+                    if (self.gradient_checkpointing and self.training
+                            and not self.frontcnn_mask.checkpoint_chunks):
                         mask_features = checkpoint(self.frontcnn_mask, mask, use_reentrant=False)
                     else:
                         mask_features = self.frontcnn_mask(mask)
@@ -380,9 +457,25 @@ class LakeDrainageClassifier(nn.Module):
                 else:
                     lstm_out = self.clstm(img_features)   # [B, T, C_hidden, Hf, Wf]
 
-                # aggregate by taking last timestep and global pooling
-                last_hidden = lstm_out[:, -1, :, :, :]   # [B, C_hidden, Hf, Wf]
-                img_features = self.global_pool(last_hidden.unsqueeze(1)).squeeze(1)  # [B, C_hidden] or [B, 2*C_hidden]
+                # Temporal readout. 'last' forces the drainage signal to survive
+                # up to ~150 recurrent steps to reach the classifier.
+                if self.temporal_readout == 'last':
+                    # return_sequence=False, so lstm_out is already [B, C, Hf, Wf]
+                    img_features = self.global_pool(lstm_out.unsqueeze(1)).squeeze(1)
+                elif self.temporal_readout == 'mean':
+                    img_features = self.global_pool(lstm_out.mean(dim=1).unsqueeze(1)).squeeze(1)
+                elif self.temporal_readout == 'max':
+                    img_features = self.global_pool(lstm_out.amax(dim=1).unsqueeze(1)).squeeze(1)
+                else:
+                    # 'attn': pool every step spatially, then attend over time.
+                    pooled = self.global_pool(lstm_out)          # [B, T, D]
+                    # A day with no scene is all-zero in every spectral channel
+                    # under both zero-fill and mean-fill-then-standardise, so
+                    # "any non-zero spectral value" is the observed-day flag.
+                    with torch.no_grad():
+                        spectral = x[:, :, :self.n_imagery_channels, :, :]
+                        valid = spectral.flatten(2).abs().amax(dim=-1) > 0   # [B, T]
+                    img_features = self.temporal_attn(pooled, valid)       # [B, D]
 
             features.append(img_features)
 
@@ -484,7 +577,8 @@ class LakeDrainageClassifier(nn.Module):
             if self.use_vector_lstm:
                 temporal_str = "LSTM (vector mode, 1x1 spatial)"
             else:
-                temporal_str = f"ConvLSTM (spatial mode, {self.effective_hw[0]}x{self.effective_hw[1]})"
+                temporal_str = (f"ConvLSTM (spatial mode, {self.effective_hw[0]}x{self.effective_hw[1]}, "
+                                f"readout={self.temporal_readout}, pool={self.pool_type})")
         else:
             temporal_str = "N/A (no imgseq)"
 
@@ -494,7 +588,9 @@ class LakeDrainageClassifier(nn.Module):
             f"imgseq={self.use_imgseq}, "
             f"{area_str}, "
             f"{cloudy_str}{seq_len_str}\n"
-            f"  Spectral bands: {spectral_str} ({self.n_imagery_channels} channels + mask)\n"
+            f"  Spectral bands: {spectral_str} ({self.n_imagery_channels} channels"
+            f" + {self.n_aux_channels} aux"
+            f"{', expect ' + str(self.expect_channels) + ' in' if self.expect_channels is not None else ''})\n"
             f"  Temporal processing: {temporal_str}\n"
             f"  Attention: {self.attention_type}\n"
             f"  Feature dims: {feature_dims}\n"

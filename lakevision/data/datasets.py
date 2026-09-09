@@ -98,7 +98,27 @@ class LakeDataset(Dataset):
         band_stats: Path to JSON file with band statistics, or dict with stats.
             If provided, uses per-band mean/std normalization instead of simple scaling.
         cloudy_seq_var: Name of the cloudy_seq variable in NC files (default: 'cloudy_seq_rgb').
-            Set to None to disable cloudy_seq loading.
+            Set to None to disable cloudy_seq loading. The special name
+            ``'observed'`` derives the series from the file instead of reading a
+            variable: 1.0 where ``p_water`` was measured that day, 0.0 where it
+            is NaN and gets forward-filled (composites, which carry no NaN,
+            yield all ones).
+        validity_channel: append an aux channel that is 1 where the red band was
+            observed (finite) and 0 where it was NaN, per pixel per day. Computed
+            BEFORE any fill. (default: False)
+        fill: how NaN pixels are filled: 'zero' (default, ESSD) or 'mean' (the
+            training-split band mean from ``band_stats``, so the pixel standardises
+            to 0 instead of about -7 sigma). 'mean' requires band_stats.
+        mask_source: deposit masks to append as aux channels: None (default),
+            'static' (``lake_boundary`` [y, x], broadcast over time), 'dynamic'
+            (``water_mask_ndwi`` [time, y, x], fill value 255 -> 0) or 'both'.
+            These are separate variables in the SDR deposit, not a band, so they
+            are independent of ``use_mask`` (the composites' trailing band).
+
+    Channel layout of img_seq: [spectral bands in channels_to_load order,
+    aux channels (validity, static mask, dynamic mask; only those enabled),
+    legacy trailing 'mask' band if use_mask]. ``n_channels`` is the total and
+    ``n_aux_channels`` the aux count; the model asserts against them.
         preload_to_ram: Whether to preload all NC files into RAM during initialization.
             This eliminates I/O during training but requires ~1GB per lake file.
             Recommended for training sets when sufficient memory is available (e.g., 800GB for ~700 lakes).
@@ -145,6 +165,10 @@ class LakeDataset(Dataset):
         labels_dict: Optional[Dict[str, int]] = None,
         # RAM preloading
         preload_to_ram: bool = False,
+        # Aux channels and fill policy (all off = ESSD-identical)
+        validity_channel: bool = False,
+        fill: str = 'zero',
+        mask_source: Optional[str] = None,
     ):
         self.seq_len = seq_len
         self.default_label = label
@@ -157,6 +181,21 @@ class LakeDataset(Dataset):
         self.use_swir22 = use_swir22
         self.use_mask = use_mask
         self.cloudy_seq_var = cloudy_seq_var
+
+        if fill not in ('zero', 'mean'):
+            raise ValueError(f"fill must be 'zero' or 'mean', got '{fill}'")
+        if mask_source not in (None, 'static', 'dynamic', 'both'):
+            raise ValueError(f"mask_source must be None, 'static', 'dynamic' or 'both', got '{mask_source}'")
+        self.validity_channel = validity_channel
+        self.fill = fill
+        self.mask_source = mask_source
+        self.load_static_mask = mask_source in ('static', 'both')
+        self.load_dynamic_mask = mask_source in ('dynamic', 'both')
+        self.aux_channel_names = (
+            (['validity'] if validity_channel else [])
+            + (['mask_static'] if self.load_static_mask else [])
+            + (['mask_dynamic'] if self.load_dynamic_mask else []))
+        self.n_aux_channels = len(self.aux_channel_names)
 
         # Load band statistics if provided
         if band_stats is None:
@@ -178,8 +217,14 @@ class LakeDataset(Dataset):
         if use_mask:
             self.channels_to_load.append('mask')
 
-        self.n_channels = len(self.channels_to_load)
-        print(f"Loading {self.n_channels} channels: {self.channels_to_load}")
+        if self.fill == 'mean' and self.band_stats is None:
+            raise ValueError("fill='mean' needs band_stats (the training-split band means)")
+
+        self.n_spectral_channels = len(self.channels_to_load) - (1 if use_mask else 0)
+        self.n_channels = len(self.channels_to_load) + self.n_aux_channels
+        print(f"Loading {self.n_channels} channels: {self.channels_to_load[:self.n_spectral_channels]}"
+              f" + aux {self.aux_channel_names}"
+              f"{' + [mask]' if use_mask else ''}")
 
         # collect all .nc file paths
         self.file_paths = self._collect_paths(data_paths)
@@ -242,13 +287,14 @@ class LakeDataset(Dataset):
 
         self._cache = []
         for i, fp in enumerate(self.file_paths):
-            imagery, water_area, cloudy_seq_data, lake_id = self._load_from_disk(fp)
+            imagery, water_area, cloudy_seq_data, lake_id, aux = self._load_from_disk(fp)
 
             self._cache.append({
                 'imagery': imagery,
                 'water_area': water_area,
                 'cloudy_seq': cloudy_seq_data,
                 'lake_id': lake_id,
+                'aux': aux,
             })
 
             if (i + 1) % 100 == 0 or (i + 1) == len(self.file_paths):
@@ -267,8 +313,9 @@ class LakeDataset(Dataset):
     def _load_from_disk(self, fp):
         """Load a single NC file, auto-detecting format.
 
-        Returns (imagery, water_area, cloudy_seq_data, lake_id) where
-        imagery is [T, C_selected, H, W] and water_area/cloudy_seq may be None.
+        Returns (imagery, water_area, cloudy_seq_data, lake_id, aux) where
+        imagery is [T, C_selected, H, W] (NaNs intact), water_area/cloudy_seq
+        may be None, and aux is [T, n_aux, H, W] float32 or None.
 
         Uses netCDF4 directly (not xarray) because xarray's open_dataset +
         .isel().values path adds ~2x peak memory and per-file overhead. The
@@ -327,7 +374,27 @@ class LakeDataset(Dataset):
                 dtype=np.float32,
             )
 
+            # --- Aux channels, computed on the raw (NaN-carrying) reflectance ---
+            aux_parts = []
+            if self.validity_channel:
+                # Red is always channel 0 of channels_to_load.
+                aux_parts.append(np.isfinite(imagery[:, 0]).astype(np.float32))
+            if self.load_static_mask:
+                if 'lake_boundary' not in nc.variables:
+                    raise ValueError(f"{fp}: mask_source asks for 'lake_boundary' but the file has none")
+                lb = np.asarray(nc.variables['lake_boundary'][:]) == 1
+                aux_parts.append(np.broadcast_to(lb, imagery.shape[0:1] + lb.shape).astype(np.float32))
+            if self.load_dynamic_mask:
+                if 'water_mask_ndwi' not in nc.variables:
+                    raise ValueError(f"{fp}: mask_source asks for 'water_mask_ndwi' but the file has none")
+                # uint8: 0 no_water, 1 water, 255 fill (unobserved) -> 0; the
+                # validity channel is where "unobserved" is carried.
+                wm = np.asarray(nc.variables['water_mask_ndwi'][:]) == 1
+                aux_parts.append(wm.astype(np.float32))
+            aux = np.stack(aux_parts, axis=1) if aux_parts else None   # [T, n_aux, H, W]
+
             water_area = None
+            observed = None
             if 'water_area' in nc.variables:
                 # Composites are written NaN-filled; a NaN here means a bad
                 # file (e.g. an all-NaN Dunmire series slipped through the
@@ -350,15 +417,21 @@ class LakeDataset(Dataset):
                         f"{fp}: p_water is all-NaN (no usable observation all "
                         f"season) — no such lake should exist in the deposit."
                     )
+                observed = np.isfinite(water_area).astype(np.float32)  # before the fill
                 water_area = _ffill_bfill_1d(water_area)
 
             cloudy_seq_data = None
-            if self.cloudy_seq_var and self.cloudy_seq_var in nc.variables:
+            if self.cloudy_seq_var == 'observed':
+                if water_area is None:
+                    raise ValueError(f"{fp}: cloudy_seq_var='observed' needs p_water or water_area")
+                # Composites carry no NaN, so every day counts as observed.
+                cloudy_seq_data = observed if observed is not None else np.ones(water_area.shape, np.float32)
+            elif self.cloudy_seq_var and self.cloudy_seq_var in nc.variables:
                 cloudy_seq_data = np.asarray(nc.variables[self.cloudy_seq_var][:])
 
             lake_id = nc.getncattr('lake_id') if 'lake_id' in nc.ncattrs() else fp.stem
 
-        return imagery, water_area, cloudy_seq_data, lake_id
+        return imagery, water_area, cloudy_seq_data, lake_id, aux
 
     def __getitem__(self, idx):
         # Load data from cache or disk
@@ -368,9 +441,10 @@ class LakeDataset(Dataset):
             water_area = cached['water_area']
             cloudy_seq_data = cached['cloudy_seq']
             lake_id = cached['lake_id']
+            aux = cached['aux']
         else:
             fp = self.file_paths[idx]
-            imagery, water_area, cloudy_seq_data, lake_id = self._load_from_disk(fp)
+            imagery, water_area, cloudy_seq_data, lake_id, aux = self._load_from_disk(fp)
 
         n_timesteps = imagery.shape[0]
 
@@ -392,8 +466,12 @@ class LakeDataset(Dataset):
             start = 0
             end = min(self.seq_len, n_timesteps)
 
-        # Extract sequences
+        # Extract sequences. With preload_to_ram the slice is a view into the
+        # cached array and the fill/normalisation below are in place, so copy.
         img_seq = imagery[start:end]  # [seq_len, C, H, W]
+        if self._cache is not None:
+            img_seq = img_seq.copy()
+        aux_seq = None if aux is None else aux[start:end]
 
         if water_area is not None:
             area_seq = water_area[start:end]
@@ -405,8 +483,18 @@ class LakeDataset(Dataset):
         else:
             cloudy_seq = np.ones(end - start, dtype=np.float32)
 
-        # Handle NaNs in imagery
-        img_seq = np.nan_to_num(img_seq, nan=0.0)
+        # Handle NaNs in imagery, in place. 'mean' fills each spectral band at its
+        # training-split mean so the pixel standardises to 0; anything else
+        # (the legacy mask band, or fill='zero') gets 0.
+        n_spec = self.n_spectral_channels
+        if self.fill == 'mean':
+            for i, ch in enumerate(self.channels_to_load[:n_spec]):
+                mean = self.band_stats[ch]['mean'] if ch in self.band_stats else 0.0
+                np.nan_to_num(img_seq[:, i], nan=mean, copy=False)
+            if img_seq.shape[1] > n_spec:
+                np.nan_to_num(img_seq[:, n_spec:], nan=0.0, copy=False)
+        else:
+            np.nan_to_num(img_seq, nan=0.0, copy=False)
 
         # Get label
         if lake_id in self.labels:
@@ -434,6 +522,11 @@ class LakeDataset(Dataset):
                 img_seq[:, :n_imagery_channels, :, :] = np.clip(
                     img_seq[:, :n_imagery_channels, :, :] / self.imagery_scale, 0.0, 1.0
                 )
+
+        # Assemble [spectral..., aux..., legacy mask]
+        if aux_seq is not None:
+            img_seq = np.concatenate(
+                [img_seq[:, :n_spec], aux_seq, img_seq[:, n_spec:]], axis=1)
 
         # Convert to tensors
         img_seq = torch.tensor(img_seq, dtype=torch.float32)

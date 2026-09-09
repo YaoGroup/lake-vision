@@ -5,6 +5,7 @@ Reusable model blocks for Greenland supraglacial lake drainage classification
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 class FrontCNN(nn.Module):
     """
@@ -22,6 +23,19 @@ class FrontCNN(nn.Module):
             conv output raises, since upsampling adds no information while
             multiplying downstream CLSTM cost by (target/conv)**2.
         pool (str): type of pooling to use (select from 'max', 'avg', or 'none')
+        norm (str): normalization after each Conv2d: 'none' (default, reproduces
+            ESSD) or 'group' (GroupNorm, batch-independent).
+        norm_groups (int): group count for GroupNorm, clamped to the channel count.
+        chunk_size (int or None): run the conv stack over slices of the flattened
+            B*T image axis instead of all at once. Every op here is per-image, so
+            the result is exact; only the kernel choice can vary at the 1e-6 level.
+            Chunking ALONE saves no training memory (autograd still stores every
+            chunk's activations); it is the unit that checkpoint_chunks works on.
+        checkpoint_chunks (bool): gradient-checkpoint each chunk separately, so
+            backward recomputes one chunk at a time and peak activation memory is
+            one chunk's worth regardless of batch size. Checkpointing the whole
+            FrontCNN as one segment does NOT buy this: backward rebuilds the whole
+            segment at once. Requires chunk_size. Training mode only.
 
     Input:
         x: [B, T, C, H, W] tensor of input image timestacks
@@ -50,11 +64,22 @@ class FrontCNN(nn.Module):
         >>> out = frontcnn(x) # output tensor [B=8, T=152, C_out=64, H_out=1, W_out=1]
     
     """
-    def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=None, pool='max'):
+    def __init__(self, in_channels=4, base_channels=8, num_layers=3, out_hw=None, pool='max',
+                 norm='none', norm_groups=8, chunk_size=None, checkpoint_chunks=False):
         super(FrontCNN, self).__init__()
 
         if pool not in ['max', 'avg', 'none']:
             raise ValueError(f"pool must be one of: 'max', 'avg', or 'none', but got '{pool}'")
+        if norm not in ['none', 'group']:
+            raise ValueError(f"norm must be 'none' or 'group', but got '{norm}'")
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
+        if checkpoint_chunks and chunk_size is None:
+            raise ValueError("checkpoint_chunks=True requires chunk_size")
+
+        self.norm = norm
+        self.chunk_size = chunk_size
+        self.checkpoint_chunks = checkpoint_chunks
 
         layers = []
         C_in = in_channels
@@ -62,6 +87,10 @@ class FrontCNN(nn.Module):
 
         for i in range(num_layers):
             layers.append(nn.Conv2d(C_in, C_out, kernel_size=3, padding=1))
+            if norm == 'group':
+                # No running statistics and no batch dependence, so GroupNorm is
+                # unaffected by chunking and by gradient checkpointing.
+                layers.append(nn.GroupNorm(min(norm_groups, C_out), C_out))
             layers.append(nn.LeakyReLU(inplace=True))
             layers.append(nn.MaxPool2d(kernel_size=2)) # downsample by 2
             C_in = C_out
@@ -80,8 +109,22 @@ class FrontCNN(nn.Module):
         Applies convolutional layers and pools conditionally to achieve desired output spatial dimensions.
         """
         B, T, C, H, W = x.shape
-        x = x.view(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
-        x = self.conv_block(x) # apply convolutional layers -> e.g., [B*T, C=base_channels*(2**num_layers-1), H_out, W_out]
+        x = x.reshape(B*T, C, H, W) # merge batch and time dimensions -> e.g., [B*T, 4, 512, 512]
+
+        # Each op in conv_block is per-image, so slicing the B*T axis and
+        # concatenating is exact. The memory win comes from checkpoint_chunks:
+        # backward then recomputes one chunk at a time.
+        if self.chunk_size is None or self.chunk_size >= x.shape[0]:
+            x = self.conv_block(x) # -> [B*T, C=base_channels*(2**num_layers-1), H_out, W_out]
+        else:
+            ckpt = (self.checkpoint_chunks and self.training
+                    and torch.is_grad_enabled())
+            outs = []
+            for i in range(0, x.shape[0], self.chunk_size):
+                sl = x[i:i + self.chunk_size]
+                outs.append(checkpoint(self.conv_block, sl, use_reentrant=False)
+                            if ckpt else self.conv_block(sl))
+            x = torch.cat(outs, dim=0)
         _, C_out, H_conv, W_conv = x.shape
 
         # Conditional pooling. out_hw=None means "keep whatever the conv stack
@@ -113,9 +156,48 @@ class FrontCNN(nn.Module):
 
         # reshape back to [B, T, C_out, H_out, W_out]
         _, C_out, H_out, W_out = x.shape
-        x = x.view(B, T, C_out, H_out, W_out)
+        x = x.reshape(B, T, C_out, H_out, W_out)
 
         return x
+
+
+class TemporalAttentionPool(nn.Module):
+    """
+    Attention over time: collapse a [B, T, D] sequence to [B, D] with learned,
+    per-lake weights instead of reading only the last step.
+
+    One Linear(D, 1) scores every step, invalid steps (days with no scene) are
+    masked to -1e4 before the softmax, and the output is the weighted sum. The
+    weights are kept on ``self.last_weights`` after every forward so inference
+    can dump a per-lake "when did the model look" curve.
+
+    Args:
+        dim (int): feature dimension D of each step
+
+    Input:
+        h: [B, T, D]
+        valid: optional [B, T] bool, True where the step is a real observation.
+            If every step of a sample is invalid the mask is ignored for that
+            sample (plain unmasked attention) rather than producing NaNs.
+
+    Output:
+        [B, D]
+    """
+    def __init__(self, dim):
+        super(TemporalAttentionPool, self).__init__()
+        self.score = nn.Linear(dim, 1)
+        self.last_weights = None
+
+    def forward(self, h, valid=None):
+        s = self.score(h).squeeze(-1)                       # [B, T]
+        if valid is not None:
+            valid = valid.to(dtype=torch.bool)
+            all_missing = ~valid.any(dim=1, keepdim=True)    # [B, 1]
+            valid = valid | all_missing                     # keep softmax finite
+            s = s.masked_fill(~valid, -1e4)
+        w = torch.softmax(s.float(), dim=1).to(h.dtype)     # [B, T]
+        self.last_weights = w.detach()
+        return (w.unsqueeze(-1) * h).sum(dim=1)             # [B, D]
     
 class ClassHeadMLP(nn.Module):
     """

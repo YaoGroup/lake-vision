@@ -46,7 +46,8 @@ class CellCLSTM(nn.Module):
         >>> h_new, c_new = cell(x, h, c) # new hidden and cell states
         >>> print(h_new.shape, c_new.shape) # both should be [16, 64, 64, 64]
     """
-    def __init__(self, input_channels, hidden_channels, kernel_size=3):
+    def __init__(self, input_channels, hidden_channels, kernel_size=3,
+                 forget_bias=0.0):
         super(CellCLSTM, self).__init__()
 
         if kernel_size % 2 == 0:
@@ -65,6 +66,15 @@ class CellCLSTM(nn.Module):
             padding=padding,
             bias=True,
         )
+
+        # Forget-gate bias. At 0.0 the gate opens at sigmoid(0)=0.5, so the cell
+        # state decays by about half per step early in training; over T=153 that
+        # erases a mid-season drainage long before the readout. 1.0 (sigmoid=0.73)
+        # is the standard fix (Jozefowicz et al. 2015). Default 0.0 keeps the
+        # ESSD tags bit-for-bit. Gate order matches the chunk(4) in forward: i, f, o, g.
+        if forget_bias:
+            with torch.no_grad():
+                self.conv.bias[hidden_channels:2 * hidden_channels].fill_(forget_bias)
 
     def forward(self, x, h_prev, c_prev):
         """
@@ -148,6 +158,7 @@ class CLSTM(nn.Module):
         hidden_channels,
         kernel_size=3,
         return_sequence=True,
+        forget_bias=0.0,
     ):
         super(CLSTM, self).__init__()
 
@@ -155,7 +166,8 @@ class CLSTM(nn.Module):
         self.hidden_channels = hidden_channels
         self.return_sequence = return_sequence
 
-        self.cell = CellCLSTM(input_channels, hidden_channels, kernel_size)
+        self.cell = CellCLSTM(input_channels, hidden_channels, kernel_size,
+                              forget_bias=forget_bias)
 
     def forward(self, x):
         """
