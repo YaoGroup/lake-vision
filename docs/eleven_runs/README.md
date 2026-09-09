@@ -44,7 +44,8 @@ https://claude.ai/code/artifact/1ce47cc8-92e4-4be1-8839-302d482b99da
 Memory: at batch 8 R9 and R10 exceed a 40 GB A100 and R2 is marginal, so those three
 go up as a second array on 80 GB A100s with both features in the constraint,
 `-C "GPU_SKU:A100_SXM4&GPU_MEM:80GB"` (`GPU_MEM:80GB` alone lands on an H100 that
-`py-pytorch/2.2.1` cannot drive). Fallback if none are free:
+`py-pytorch/2.2.1` cannot drive). serc has 40 such GPUs on six nodes (sh03-17n01/03/05/07, sh03-18n11/16) and
+one H100 node (sh04-09n01). Fallback if none are free:
 `--batch_size 4 --accumulation_steps 2` (no BatchNorm, so the gradient is
 identical). Every run passes `--host_mem_budget_gb 200`.
 
