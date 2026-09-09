@@ -52,7 +52,7 @@ for run in "${RUNS[@]}"; do
         --save_path "$OUT/$run.pth" --test_predictions_csv "$OUT/${run}_test_predictions.csv" \
         $COMMON_FLAGS $(run_flags "$run") > "$log" 2>&1; then
         loss=$(grep -E "^  Train " "$log" | tail -1 | awk '{print $2}')
-        f1=$(grep -E "F1 \(macro\):" "$log" | tail -1 | awk '{print $NF}')
+        f1=$(grep -E "F1 \(macro\):" "$log" | tail -1 | sed 's/.*://')
         peak=$(grep -E "^Model input:" "$log" | head -1)
         if [ -n "$loss" ] && [ "$loss" != "nan" ] && [ -f "$OUT/${run}_test_predictions.csv" ]; then
             echo "    OK   final train loss $loss, test macro-F1 $f1 | $peak"

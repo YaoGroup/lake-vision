@@ -1,8 +1,10 @@
 # Eleven Runs for lake-vision
 
 The 2026-09-08 proposal for eleven Sherlock training runs on the ESSD baseline
-classifier: one change each against a common reference, plus the stack. Status:
-**proposal**. Nothing here has been coded into the model or submitted.
+classifier: one change each against a common reference, plus the stack. Status
+(2026-09-08 evening): **coded and gated locally, not yet submitted**. The code is on
+this branch, all eleven configs pass the Mac gate, and the three Sherlock steps
+(band stats, 50-lake smoke array, the two full arrays) are Josh's to submit.
 
 Start by opening `ELEVEN_RUNS.html` in a browser (it is self-contained: no
 build, no server; the fonts come from Google Fonts and fall back cleanly
