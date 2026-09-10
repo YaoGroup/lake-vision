@@ -11,6 +11,10 @@
 # training-split band_stats.json when R3 or R10 is used.
 
 ELEVEN_RUNS=(R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10)
+# Added 2026-09-09 after R1 proved unstable (its attention stayed near-uniform, so
+# the readout is effectively a mean; suspect: gradient into all 153 steps with no
+# clipping). R11 isolates the readout; R12 is R1 with gradient clipping.
+EXTRA_RUNS=(R11 R12)
 COMMON_FLAGS="--no_mask --test_checkpoint f1"
 
 run_flags() {
@@ -26,6 +30,8 @@ run_flags() {
         R8)  echo "--soft_labels" ;;
         R9)  echo "--frontcnn_base_channels 16 --clstm_hidden 64" ;;
         R10) echo "$(run_flags R1) $(run_flags R2) $(run_flags R3) $(run_flags R4) $(run_flags R5) $(run_flags R6) $(run_flags R7) $(run_flags R8)" ;;
+        R11) echo "--temporal_readout mean" ;;
+        R12) echo "$(run_flags R1) --grad_clip 1.0" ;;
         *)   echo "unknown run $1" >&2; return 1 ;;
     esac
 }

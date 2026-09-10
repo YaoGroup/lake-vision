@@ -33,6 +33,9 @@
 #     sbatch --array=8-10 -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" --mem=320GB \
 #            --export=ALL,MEM_BUDGET=208 engine/training/run_eleven_runs.sh
 #
+#   Follow-ups R11 (mean readout) and R12 (R1 + grad clip), 40 GB cards:
+#     sbatch --array=11-12 --time=96:00:00 engine/training/run_eleven_runs.sh
+#
 #   Smoke test first (50 lakes per split, 5 epochs, both classes at once):
 #     sbatch --array=0-10 --time=04:00:00 -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" \
 #            --mem=320GB --export=ALL,SMOKE=1,MEM_BUDGET=208 engine/training/run_eleven_runs.sh
@@ -45,7 +48,7 @@
 
 set -euo pipefail
 
-ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10)
+ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10 R11 R12)   # 11, 12: the 40 GB follow-ups
 RUN="${ARRAY_RUNS[$SLURM_ARRAY_TASK_ID]}"
 SMOKE="${SMOKE:-0}"
 MEM_BUDGET="${MEM_BUDGET:-166}"     # ~65% of --mem, the loader queue's share

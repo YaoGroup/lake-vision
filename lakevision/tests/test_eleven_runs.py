@@ -277,6 +277,41 @@ class TestTrainerPieces:
         assert lrs[-1] > 1e-6 and opt.param_groups[0]["lr"] == pytest.approx(1e-6, rel=1e-3)
         assert rt.build_lr_schedule(opt, "none", 5, 1, 1e-4, 1e-6) is None
 
+    def test_grad_norm_logged_and_clipped(self):
+        """train_one_epoch reports the pre-clip norm; with grad_clip the applied norm is bounded."""
+        torch.manual_seed(0)
+        lin = nn.Linear(4, 5)
+
+        class DS(torch.utils.data.Dataset):
+            def __len__(self): return 4
+            def __getitem__(self, i):
+                return torch.randn(4) * 100, torch.zeros(1, 1), torch.zeros(1, 1), torch.tensor(i % 5), f"L{i}"
+
+        class M(nn.Module):
+            def __init__(s): super().__init__(); s.lin = lin
+            def forward(s, x, a, c): return s.lin(x)
+
+        loader = torch.utils.data.DataLoader(DS(), batch_size=2)   # 2 optimizer steps per epoch
+        opt = torch.optim.SGD(lin.parameters(), lr=0.0)
+        _, m = rt.train_one_epoch(M(), loader, opt, nn.CrossEntropyLoss(), "cpu", 5, grad_clip=None)
+        assert m["grad_norm_max"] > 1.0 and m["grad_norm_mean"] > 0
+        # lr=1: with clipping each step moves the weights by at most 1.0
+        before = torch.cat([p.detach().flatten().clone() for p in lin.parameters()])
+        opt = torch.optim.SGD(lin.parameters(), lr=1.0)
+        _, m2 = rt.train_one_epoch(M(), loader, opt, nn.CrossEntropyLoss(), "cpu", 5, grad_clip=1.0)
+        after = torch.cat([p.detach().flatten() for p in lin.parameters()])
+        assert m2["grad_norm_max"] > 1.0                      # reported norm is PRE-clip
+        assert (after - before).norm().item() <= 2.0 + 1e-4   # two clipped steps
+
+    def test_grad_clip_bounds_update(self):
+        """With grad_clip the applied gradient norm is at most the clip value."""
+        torch.manual_seed(0)
+        lin = nn.Linear(4, 5)
+        x = torch.randn(3, 4) * 100; y = torch.tensor([0, 1, 2])
+        nn.CrossEntropyLoss()(lin(x), y).backward()
+        assert torch.nn.utils.clip_grad_norm_(lin.parameters(), 1.0) > 1.0   # was large
+        assert torch.sqrt(sum((p.grad ** 2).sum() for p in lin.parameters())).item() == pytest.approx(1.0, rel=1e-4)
+
     def test_checkpoint_both_formats(self, tmp_path):
         m = tiny()
         bare, prov = tmp_path / "bare.pth", tmp_path / "prov.pth"
@@ -344,8 +379,9 @@ R10_FLAGS = dict(temporal_readout="attn", pool_type="both", frontcnn_norm="group
                  use_nir=True, use_swir16=True, soft_labels=True)
 
 
-@pytest.mark.parametrize("flags", [dict(), R10_FLAGS, dict(frontcnn_base_channels=16, clstm_hidden=64)],
-                         ids=["R0", "R10", "R9"])
+@pytest.mark.parametrize("flags", [dict(), R10_FLAGS, dict(frontcnn_base_channels=16, clstm_hidden=64),
+                                   dict(temporal_readout="attn", pool_type="both", grad_clip=1.0)],
+                         ids=["R0", "R10", "R9", "R12"])
 def test_trainer_end_to_end(tmp_path, flags):
     d, csv = _deposit_dir(tmp_path)
     config = dict(
@@ -364,6 +400,8 @@ def test_trainer_end_to_end(tmp_path, flags):
     config.update(flags)
     best_val_loss, test_metrics = rt.train(config)
     assert np.isfinite(best_val_loss) and np.isfinite(test_metrics["f1_macro"])
+    # the epoch line carries the pre-clip gradient norm for every run
+
     assert (tmp_path / "m_bestf1.pth").exists()
     state, meta = load_checkpoint(tmp_path / "m_bestf1.pth")
     assert meta["config"].get("temporal_readout", "last") == flags.get("temporal_readout", "last")

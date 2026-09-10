@@ -47,6 +47,8 @@ https://claude.ai/code/artifact/1ce47cc8-92e4-4be1-8839-302d482b99da
 | R8 | soft targets from `label_probability` |
 | R9 | capacity: base 16, hidden 64 (expected null; the run that died twice) |
 | R10 | the stack: R1–R8 together |
+| R11 | follow-up (2026-09-09): mean readout, the readout isolated from R1's pooling and scorer |
+| R12 | follow-up (2026-09-09): R1 + gradient clipping at 1.0, with the pre-clip gradient norm logged |
 
 Memory: at batch 8 R9 and R10 exceed a 40 GB A100 and R2 is marginal, so those three
 go up as a second array on 80 GB A100s with both features in the constraint,

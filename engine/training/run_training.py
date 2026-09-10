@@ -357,7 +357,8 @@ def create_splits_fixed_test(
 
 
 def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
-                    accumulation_steps=1, amp=False, soft_targets=None, class_weights=None):
+                    accumulation_steps=1, amp=False, soft_targets=None, class_weights=None,
+                    grad_clip=None):
     """Train for one epoch and return loss + metrics.
 
     Args:
@@ -369,9 +370,21 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
         soft_targets: optional {lake_id: probs[num_classes]}. When given the
              loss is the weighted soft cross-entropy against those vectors
              (class_weights required); metrics stay on the hard labels.
+        grad_clip: optional max global gradient norm (clip_grad_norm_) applied
+             before every optimizer step. None = ESSD (no clipping).
     """
     if soft_targets is not None and class_weights is None:
         raise ValueError("soft_targets needs class_weights")
+    grad_norms = []   # pre-clip global gradient norm at every optimizer step
+
+    def _step():
+        # clip_grad_norm_ returns the total norm; with max_norm=inf it clips nothing,
+        # so the norm is logged for every run whether or not clipping is on.
+        norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), grad_clip if grad_clip is not None else float('inf'))
+        grad_norms.append(float(norm))
+        optimizer.step()
+        optimizer.zero_grad()
     model.train()
     total_loss = 0.0
     n_batches = 0
@@ -413,8 +426,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
 
         # Step optimizer every accumulation_steps batches
         if (batch_idx + 1) % accumulation_steps == 0:
-            optimizer.step()
-            optimizer.zero_grad()
+            _step()
 
         total_loss += loss.item() * accumulation_steps  # Unscale for logging
         n_batches += 1
@@ -426,8 +438,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
 
     # Handle remaining gradients if batches not divisible by accumulation_steps
     if n_batches % accumulation_steps != 0:
-        optimizer.step()
-        optimizer.zero_grad()
+        _step()
 
     avg_loss = total_loss / n_batches
 
@@ -437,6 +448,8 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
         'precision_macro': precision_score(all_labels, all_preds, average='macro', zero_division=0),
         'recall_macro': recall_score(all_labels, all_preds, average='macro', zero_division=0),
         'f1_macro': f1_score(all_labels, all_preds, average='macro', zero_division=0),
+        'grad_norm_max': max(grad_norms) if grad_norms else 0.0,
+        'grad_norm_mean': float(np.mean(grad_norms)) if grad_norms else 0.0,
     }
 
     # Per-class metrics
@@ -625,6 +638,7 @@ def train(config: dict):
           + (f" (warmup {config.get('warmup_epochs', 10)} epochs, floor {config.get('lr_min', 1e-6)})"
              if lr_schedule == 'warmup_cosine' else ""))
     print(f"Soft labels:    {config.get('soft_labels', False)}")
+    print(f"Grad clip:      {config.get('grad_clip')}")
     print(f"Num workers:    {config.get('num_workers', 12)}")
 
     print("\n--- INPUT STREAMS ---")
@@ -1105,7 +1119,8 @@ def train(config: dict):
         amp = config.get("amp", False)
         train_loss, train_metrics = train_one_epoch(
             model, train_loader, optimizer, criterion, device, num_classes, accumulation_steps,
-            amp=amp, soft_targets=soft_targets, class_weights=class_weights)
+            amp=amp, soft_targets=soft_targets, class_weights=class_weights,
+            grad_clip=config.get("grad_clip"))
         val_loss, val_metrics = evaluate(model, val_loader, criterion, device, num_classes, amp=amp)
 
         epoch_time = time.time() - epoch_start_time
@@ -1134,6 +1149,8 @@ def train(config: dict):
             "lr": optimizer.param_groups[0]["lr"],
             "epoch_time_sec": epoch_time,
             "peak_gpu_gb": peak_gpu_gb,
+            "grad_norm_max": train_metrics["grad_norm_max"],
+            "grad_norm_mean": train_metrics["grad_norm_mean"],
         }
 
         # Per-class metrics
@@ -1149,7 +1166,8 @@ def train(config: dict):
 
         # Print epoch summary
         print(f"\nEpoch {epoch+1}/{epochs} | Time: {epoch_time:.1f}s | ETA: {eta_str} | "
-              f"peak GPU {peak_gpu_gb:.1f} GB | lr {optimizer.param_groups[0]['lr']:.2e}")
+              f"peak GPU {peak_gpu_gb:.1f} GB | lr {optimizer.param_groups[0]['lr']:.2e} | "
+              f"grad norm mean {train_metrics['grad_norm_mean']:.2f} max {train_metrics['grad_norm_max']:.2f}")
         print(f"  {'':12} {'Loss':>8} {'Acc':>8} {'Prec':>8} {'Recall':>8} {'F1':>8}")
         print(f"  {'Train':12} {train_loss:>8.4f} {train_metrics['accuracy']:>8.3f} {train_metrics['precision_macro']:>8.3f} {train_metrics['recall_macro']:>8.3f} {train_metrics['f1_macro']:>8.3f}")
         print(f"  {'Val':12} {val_loss:>8.4f} {val_metrics['accuracy']:>8.3f} {val_metrics['precision_macro']:>8.3f} {val_metrics['recall_macro']:>8.3f} {val_metrics['f1_macro']:>8.3f}")
@@ -1335,6 +1353,9 @@ def main():
                              "(linear warm-up over --warmup_epochs, cosine to --lr_min at the last epoch).")
     parser.add_argument("--warmup_epochs", type=int, default=10)
     parser.add_argument("--lr_min", type=float, default=1e-6)
+    parser.add_argument("--grad_clip", type=float, default=None,
+                        help="Clip the global gradient norm to this value before each step "
+                             "(None = ESSD, no clipping).")
     parser.add_argument("--soft_labels", action="store_true", default=False,
                         help="Train on the p_<class> probability columns of the label CSVs "
                              "(weighted soft cross-entropy). Metrics stay on hard labels.")
