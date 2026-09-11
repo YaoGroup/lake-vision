@@ -33,6 +33,10 @@
 #     sbatch --array=8-10 -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" --mem=320GB \
 #            --export=ALL,MEM_BUDGET=208 engine/training/run_eleven_runs.sh
 #
+#   No 80 GB node free? Same gradient on a 40 GB card via accumulation:
+#     sbatch --array=9  --time=96:00:00 --export=ALL,EXTRA_FLAGS="--batch_size 4 --accumulation_steps 2" engine/training/run_eleven_runs.sh
+#     sbatch --array=10 --time=96:00:00 --export=ALL,EPOCHS=200,EXTRA_FLAGS="--batch_size 2 --accumulation_steps 4" engine/training/run_eleven_runs.sh
+#
 #   Follow-ups R11 (mean readout) and R12 (R1 + grad clip), 40 GB cards:
 #     sbatch --array=11-12 --time=96:00:00 engine/training/run_eleven_runs.sh
 #
@@ -54,6 +58,7 @@ SMOKE="${SMOKE:-0}"
 MEM_BUDGET="${MEM_BUDGET:-166}"     # ~65% of --mem, the loader queue's share
 EPOCHS="${EPOCHS:-400}"             # override per submission, e.g. --export=ALL,EPOCHS=350
 NUM_WORKERS="${NUM_WORKERS:-12}"    # raise together with --cpus-per-task
+EXTRA_FLAGS="${EXTRA_FLAGS:-}"      # e.g. "--batch_size 4 --accumulation_steps 2" to run an 80 GB run on a 40 GB card (same gradient: no BatchNorm)
 
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
@@ -90,7 +95,7 @@ if [ "$SMOKE" != "1" ] && [ -f "$SAVE_PATH" ]; then
     echo "ERROR: $SAVE_PATH exists; refusing to overwrite a finished run. Move it or change TAG."; exit 1
 fi
 
-FLAGS="$COMMON_FLAGS $(run_flags "$RUN") $EXTRA"
+FLAGS="$COMMON_FLAGS $(run_flags "$RUN") $EXTRA $EXTRA_FLAGS"
 GIT_SHA="$(cd "$REPO_DIR" && git rev-parse HEAD)"
 export LV_GIT_SHA="$GIT_SHA"
 
