@@ -37,6 +37,25 @@
 #     sbatch --array=9  --time=96:00:00 --export=ALL,EXTRA_FLAGS="--batch_size 4 --accumulation_steps 2" engine/training/run_eleven_runs.sh
 #     sbatch --array=10 --time=96:00:00 --export=ALL,EPOCHS=200,EXTRA_FLAGS="--batch_size 2 --accumulation_steps 4" engine/training/run_eleven_runs.sh
 #
+#   R10 host memory. At 8 channels a sample is 1.2 GB and every worker holds
+#   ~4 batches (2 queued + 2 in flight) = 38 GB. Job 42611971 was OOM-killed
+#   at --mem=320GB with 10 workers (the old planner counted only the queue).
+#   The planner now counts the working set, so MEM_BUDGET decides the worker
+#   count: 208 GB -> 5 workers. Either give it the RAM for 10 workers
+#   (needs a node with >= 640 GB; check: sinfo -p serc -N -h -o "%N %m %f" | grep 80GB)
+#     sbatch --array=10 --time=96:00:00 -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" --mem=600GB \
+#            --export=ALL,EPOCHS=200,MEM_BUDGET=400 engine/training/run_eleven_runs.sh
+#   or keep 320 GB and shrink the working set instead (7 workers, prefetch 1):
+#     sbatch --array=10 --time=96:00:00 -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" --mem=320GB \
+#            --export=ALL,EPOCHS=200,MEM_BUDGET=208,EXTRA_FLAGS="--prefetch_factor 1" engine/training/run_eleven_runs.sh
+#   Move or delete models/eleven/lakevision_eleven_R10*.pth first if any exist.
+#
+#   Score an existing best-F1 checkpoint on the test set without retraining
+#   (R3 crashed at epoch 325 on an Oak I/O error with its epoch-271 best saved):
+#     sbatch --array=2 --time=03:00:00 --export=ALL,EVAL_ONLY=1 engine/training/run_eleven_runs.sh
+#   Runs the trainer with --epochs 0: it loads <run>_bestf1.pth, writes the
+#   predictions CSV and prints the test block. Same card class as the run.
+#
 #   Follow-ups R11 (mean readout) and R12 (R1 + grad clip), 40 GB cards:
 #     sbatch --array=11-12 --time=96:00:00 engine/training/run_eleven_runs.sh
 #
@@ -59,6 +78,7 @@ MEM_BUDGET="${MEM_BUDGET:-166}"     # ~65% of --mem, the loader queue's share
 EPOCHS="${EPOCHS:-400}"             # override per submission, e.g. --export=ALL,EPOCHS=350
 NUM_WORKERS="${NUM_WORKERS:-12}"    # raise together with --cpus-per-task
 EXTRA_FLAGS="${EXTRA_FLAGS:-}"      # e.g. "--batch_size 4 --accumulation_steps 2" to run an 80 GB run on a 40 GB card (same gradient: no BatchNorm)
+EVAL_ONLY="${EVAL_ONLY:-0}"         # 1: no training; score the saved <run>_bestf1.pth on the test set
 
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_lakevision"
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/lake-vision"
@@ -73,6 +93,8 @@ source "$REPO_DIR/engine/training/eleven_runs_matrix.sh"
 
 if [ "$SMOKE" = "1" ]; then
     TAG="eleven_smoke"; EXTRA="--epochs 5 --max_lakes 50"
+elif [ "$EVAL_ONLY" = "1" ]; then
+    TAG="eleven"; EXTRA="--epochs 0 --no_wandb"
 else
     TAG="eleven"; EXTRA="--epochs $EPOCHS"
 fi
@@ -91,7 +113,9 @@ done
 case "$RUN" in R3|R10)
     [ -f "$BAND_STATS" ] || { echo "ERROR: $RUN needs $BAND_STATS; run run_band_stats_crossyear.sh first"; exit 1; } ;;
 esac
-if [ "$SMOKE" != "1" ] && [ -f "$SAVE_PATH" ]; then
+if [ "$EVAL_ONLY" = "1" ]; then
+    [ -f "${SAVE_PATH%.pth}_bestf1.pth" ] || { echo "ERROR: EVAL_ONLY needs ${SAVE_PATH%.pth}_bestf1.pth"; exit 1; }
+elif [ "$SMOKE" != "1" ] && [ -f "$SAVE_PATH" ]; then
     echo "ERROR: $SAVE_PATH exists; refusing to overwrite a finished run. Move it or change TAG."; exit 1
 fi
 
@@ -105,7 +129,7 @@ echo "=============================================="
 echo "Node:        $(hostname)   GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo n/a)"
 echo "Commit:      $GIT_SHA"
 echo "Flags:       $FLAGS"
-echo "Smoke:       $SMOKE"
+echo "Smoke:       $SMOKE   Eval-only: $EVAL_ONLY"
 echo "Model save:  $SAVE_PATH"
 echo "Predictions: $PRED_CSV"
 echo "=============================================="
@@ -153,8 +177,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --wandb_name "${TAG}_${RUN}" \
     --save_path "$SAVE_PATH" \
     --test_predictions_csv "$PRED_CSV" \
-    $FLAGS
-EXIT_CODE=$?
+    $FLAGS && EXIT_CODE=0 || EXIT_CODE=$?
 
 DUR=$(( $(date +%s) - START_TIME ))
 echo "=============================================="

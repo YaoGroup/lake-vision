@@ -123,3 +123,24 @@ class TestLoaderMemoryPlan:
         w, _, _ = self._plan(batch_size=1, sample_mb=1,
                              host_mem_budget_gb=10_000, max_workers=16)
         assert w == 16
+
+    def test_counts_the_per_worker_working_set(self):
+        """Regression: R10 (8 ch, 1224 MB/sample, bs 8) at a 208 GB budget.
+
+        Counting only the queue chose 10 workers and a 191 GB projection; the
+        job was OOM-killed at 320 GB during its first val pass (42611971).
+        With the working set counted the plan must fit the budget and choose
+        materially fewer workers.
+        """
+        w, pf, gb = self._plan(batch_size=8, sample_mb=1224, host_mem_budget_gb=208,
+                               max_workers=12)
+        assert w < 10 and gb <= 208
+        queue_only = w * pf * 8 * 1224 / 1024
+        assert gb > queue_only, "projection must include more than the queue"
+
+    def test_prefetch_one_buys_workers(self):
+        two = self._plan(batch_size=8, sample_mb=1224, host_mem_budget_gb=208,
+                         max_workers=12, prefetch_factor=2)[0]
+        one = self._plan(batch_size=8, sample_mb=1224, host_mem_budget_gb=208,
+                         max_workers=12, prefetch_factor=1)[0]
+        assert one > two

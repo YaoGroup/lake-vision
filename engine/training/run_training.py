@@ -74,6 +74,31 @@ except ImportError:
     print("wandb not installed, logging disabled")
 
 
+def _wandb_active():
+    return WANDB_AVAILABLE and wandb.run is not None
+
+
+def _wandb_log(payload):
+    """wandb.log that cannot take training down.
+
+    R3 of the eleven runs died at epoch 325 when an Oak I/O error (fsync,
+    errno 5) killed wandb's writer thread and the next wandb.log raised
+    BrokenPipe through the training loop. The offline run dir is a
+    convenience; the checkpoints and the stdout log are the record, so a
+    wandb failure is reported once and logging is switched off for the rest
+    of the run.
+    """
+    global WANDB_AVAILABLE
+    if not _wandb_active():
+        return
+    try:
+        wandb.log(payload)
+    except Exception as e:  # BrokenPipeError, OSError, wandb.Error, ...
+        print(f"  WARNING: wandb.log failed ({type(e).__name__}: {e}); "
+              f"wandb logging disabled for the rest of the run")
+        WANDB_AVAILABLE = False
+
+
 # Class names for lake drainage types
 CLASS_NAMES_ORIGINAL = ['ND', 'ED', 'LD', 'CD']  # 0: No Drainage, 1: Englacial, 2: Lateral, 3: Crevasse
 CLASS_NAMES_ED_SPLIT = ['ND', 'LD_MD', 'HF', 'CD']  # 0: No Drainage, 1: Lateral+Moulin, 2: Hydrofracture, 3: Crevasse
@@ -953,7 +978,7 @@ def train(config: dict):
     # budget instead of hardcoding them.
     # pin_memory=True enables async host→GPU transfer (overlap with compute).
     batch_size = config.get("batch_size", 8)
-    prefetch_factor = 2
+    prefetch_factor = int(config.get("prefetch_factor", 2))
 
     # Approximate per-sample MB as handed to the collate function:
     # seq_len * channels * H * W * 4 bytes (float32).
@@ -973,7 +998,7 @@ def train(config: dict):
         print(f"Per-sample:      {sample_mb:.0f} MB ({n_ch} channels x {config.get('seq_len', 153)} timesteps)")
         print(f"Budget:          {host_mem_budget_gb:.0f} GB")
         print(f"Chosen:          {num_workers} workers x {prefetch_factor} prefetch x bs {batch_size}")
-        print(f"Projected queue: {projected_gb:.0f} GB")
+        print(f"Projected:       {projected_gb:.0f} GB (queue + per-worker working set)")
     else:
         # Legacy path: fixed worker count. Safe at bs=8, OOMs the node at bs>=32.
         num_workers = config.get("num_workers", 12)
@@ -1068,7 +1093,7 @@ def train(config: dict):
     # Provenance written into every checkpoint.
     repo_dir = Path(__file__).resolve().parents[2]
     sha = git_sha(repo_dir)
-    run_id = (wandb.run.id if WANDB_AVAILABLE and wandb.run is not None else None)
+    run_id = (wandb.run.id if _wandb_active() else None)
     ckpt_config = {k: (list(v) if isinstance(v, tuple) else v) for k, v in config.items()
                    if isinstance(v, (str, int, float, bool, tuple, list, type(None)))}
     def _meta(epoch, val_metrics):
@@ -1159,7 +1184,7 @@ def train(config: dict):
             log_dict[f"val_f1_{class_name}"] = val_metrics[f"f1_{class_name}"]
 
         # Calculate estimated time remaining
-        avg_epoch_time = sum(epoch_times) / len(epoch_times)
+        avg_epoch_time = sum(epoch_times) / max(1, len(epoch_times))  # --epochs 0 = test an existing checkpoint
         remaining_epochs = epochs - (epoch + 1)
         eta_seconds = avg_epoch_time * remaining_epochs
         eta_str = f"{int(eta_seconds // 3600)}h {int((eta_seconds % 3600) // 60)}m"
@@ -1186,8 +1211,7 @@ def train(config: dict):
             for i, class_name in enumerate(CLASS_NAMES[:num_classes]):
                 print(f"  {class_name:8} {val_metrics[f'precision_{class_name}']:>8.3f} {val_metrics[f'recall_{class_name}']:>8.3f} {val_metrics[f'f1_{class_name}']:>8.3f}")
 
-        if WANDB_AVAILABLE and wandb.run is not None:
-            wandb.log(log_dict)
+        _wandb_log(log_dict)
 
         # --- Checkpointing ---
         # 1. Best val loss (canonical checkpoint — kept as the path the user passed)
@@ -1214,7 +1238,7 @@ def train(config: dict):
 
     # Training timing summary
     total_training_time = time.time() - training_start_time
-    avg_epoch_time = sum(epoch_times) / len(epoch_times)
+    avg_epoch_time = sum(epoch_times) / max(1, len(epoch_times))  # --epochs 0 = test an existing checkpoint
     print("\n" + "=" * 70)
     print("Training Complete!")
     print(f"  Total training time: {total_training_time / 3600:.2f} hours ({total_training_time:.1f} seconds)")
@@ -1272,18 +1296,21 @@ def train(config: dict):
         else:
             print(f"\nWARNING: Expected model file not found at: {save_path}")
 
-    if WANDB_AVAILABLE and wandb.run is not None:
-        wandb.log({
-            "test_loss": test_loss,
-            "test_acc": test_metrics["accuracy"],
-            "test_precision_macro": test_metrics["precision_macro"],
-            "test_recall_macro": test_metrics["recall_macro"],
-            "test_f1_macro": test_metrics["f1_macro"],
-        })
-        wandb.summary["best_val_loss"] = best_val_loss
-        wandb.summary["best_val_f1_macro"] = best_val_f1
-        wandb.summary["test_acc"] = test_metrics["accuracy"]
-        wandb.summary["test_f1_macro"] = test_metrics["f1_macro"]
+    _wandb_log({
+        "test_loss": test_loss,
+        "test_acc": test_metrics["accuracy"],
+        "test_precision_macro": test_metrics["precision_macro"],
+        "test_recall_macro": test_metrics["recall_macro"],
+        "test_f1_macro": test_metrics["f1_macro"],
+    })
+    if _wandb_active():
+        try:
+            wandb.summary["best_val_loss"] = best_val_loss
+            wandb.summary["best_val_f1_macro"] = best_val_f1
+            wandb.summary["test_acc"] = test_metrics["accuracy"]
+            wandb.summary["test_f1_macro"] = test_metrics["f1_macro"]
+        except Exception as e:
+            print(f"  WARNING: wandb.summary failed ({type(e).__name__}: {e})")
 
     return best_val_loss, test_metrics
 
@@ -1359,6 +1386,9 @@ def main():
     parser.add_argument("--soft_labels", action="store_true", default=False,
                         help="Train on the p_<class> probability columns of the label CSVs "
                              "(weighted soft cross-entropy). Metrics stay on hard labels.")
+    parser.add_argument("--prefetch_factor", type=int, default=2,
+                        help="Batches each loader worker keeps queued (default 2). 1 trims host "
+                             "memory by one batch per worker when --mem is the constraint.")
     parser.add_argument("--host_mem_budget_gb", type=float, default=None,
                         help="RAM the DataLoader queue may occupy, in GB. When "
                              "set, num_workers is chosen so that "
@@ -1547,7 +1577,7 @@ def main():
 
     train(config)
 
-    if WANDB_AVAILABLE and wandb.run is not None:
+    if _wandb_active():
         run_dir = Path(wandb.run.dir).parent
         print(f"\n{'='*60}")
         print(f"WANDB RUN COMPLETE")
@@ -1557,7 +1587,10 @@ def main():
         print(f"\nTo sync this run to wandb.ai, use:")
         print(f"  wandb sync {run_dir}")
         print(f"{'='*60}\n")
-        wandb.finish()
+        try:
+            wandb.finish()
+        except Exception as e:
+            print(f"WARNING: wandb.finish failed ({type(e).__name__}: {e}); the run is complete regardless")
 
 
 if __name__ == "__main__":

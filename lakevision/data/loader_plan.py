@@ -17,28 +17,38 @@ def sample_size_mb(seq_len, n_channels, height=512, width=512, bytes_per_elem=4)
 
 
 def plan_loader_workers(batch_size, sample_mb, host_mem_budget_gb,
-                        max_workers=16, prefetch_factor=2):
-    """Pick num_workers so the in-flight queue fits a memory budget.
+                        max_workers=16, prefetch_factor=2, working_set_batches=2):
+    """Pick num_workers so the loader's host memory fits a budget.
 
-    A DataLoader holds roughly ``num_workers * prefetch_factor * batch_size``
-    samples in RAM at once. Because that scales with batch_size, a worker count
-    that is safe at bs=8 will OOM the node at bs=32 or 64 — the failure behind
-    commit b896d26 ("Fix OOM in dataloader"). Hardcoding num_workers is the bug;
-    sizing it against a budget is the fix.
+    Each worker holds ``prefetch_factor`` finished batches in the queue AND the
+    batch it is building: the per-sample tensors, the collated copy, and the
+    shared-memory copy that hands it to the parent, which briefly coexist.
+    That working set is roughly two more batches per worker. Counting only the
+    queue is how R10 of the eleven runs (8 channels, 1.2 GB/sample, 10 workers)
+    was OOM-killed at 320 GB with a "projected queue" of 191 GB: the workers'
+    own copies were another ~190 GB the plan never saw.
+
+    Because everything scales with batch_size, a worker count that is safe at
+    bs=8 will OOM the node at bs=32 or 64 — the failure behind commit b896d26
+    ("Fix OOM in dataloader"). Hardcoding num_workers is the bug; sizing it
+    against a budget is the fix.
 
     Args:
         batch_size: samples per batch (per rank, under DDP).
         sample_mb: approximate MB per sample as handed off by the worker.
-        host_mem_budget_gb: RAM the queue may occupy. Should be well under
-            --mem, leaving room for page cache, the model, and the parent
-            process. ~65% of --mem is a reasonable starting point.
+        host_mem_budget_gb: RAM the loader may occupy. Should be well under
+            --mem, leaving room for page cache, the model, pinned batches and
+            the parent process. ~65% of --mem is a reasonable starting point.
         max_workers: never exceed this (keep cores for the main process).
         prefetch_factor: batches prefetched per worker.
+        working_set_batches: batches' worth of transient copies per worker on
+            top of the queue (default 2: assembling + collated/shared copy).
 
     Returns:
-        (num_workers, prefetch_factor, projected_queue_gb)
+        (num_workers, prefetch_factor, projected_gb) — projected_gb is the
+        total for the chosen workers, queue plus working set.
     """
-    per_worker_gb = prefetch_factor * batch_size * sample_mb / 1024.0
+    per_worker_gb = (prefetch_factor + working_set_batches) * batch_size * sample_mb / 1024.0
     if per_worker_gb <= 0:
         return max_workers, prefetch_factor, 0.0
 

@@ -379,11 +379,7 @@ R10_FLAGS = dict(temporal_readout="attn", pool_type="both", frontcnn_norm="group
                  use_nir=True, use_swir16=True, soft_labels=True)
 
 
-@pytest.mark.parametrize("flags", [dict(), R10_FLAGS, dict(frontcnn_base_channels=16, clstm_hidden=64),
-                                   dict(temporal_readout="attn", pool_type="both", grad_clip=1.0)],
-                         ids=["R0", "R10", "R9", "R12"])
-def test_trainer_end_to_end(tmp_path, flags):
-    d, csv = _deposit_dir(tmp_path)
+def _trainer_config(tmp_path, d, csv, flags):
     config = dict(
         labels_csv=[str(csv)], test_labels_csv=None, nc_dir=str(d), label_mode="essd_5class",
         id_col="lake_id", label_col="label", merge_classes=None,
@@ -398,6 +394,15 @@ def test_trainer_end_to_end(tmp_path, flags):
         test_predictions_csv=str(tmp_path / "pred.csv"), no_wandb=True,
     )
     config.update(flags)
+    return config
+
+
+@pytest.mark.parametrize("flags", [dict(), R10_FLAGS, dict(frontcnn_base_channels=16, clstm_hidden=64),
+                                   dict(temporal_readout="attn", pool_type="both", grad_clip=1.0)],
+                         ids=["R0", "R10", "R9", "R12"])
+def test_trainer_end_to_end(tmp_path, flags):
+    d, csv = _deposit_dir(tmp_path)
+    config = _trainer_config(tmp_path, d, csv, flags)
     best_val_loss, test_metrics = rt.train(config)
     assert np.isfinite(best_val_loss) and np.isfinite(test_metrics["f1_macro"])
     # the epoch line carries the pre-clip gradient norm for every run
@@ -409,3 +414,49 @@ def test_trainer_end_to_end(tmp_path, flags):
     assert len(lines) == 2 and lines[1].startswith("CW2019_0005,LD,")
     if flags.get("temporal_readout") == "attn":
         assert (tmp_path / "pred.attn.npz").exists()
+
+
+class TestWandbCannotKillTraining:
+    """R3 died at epoch 325: an Oak fsync error (errno 5) killed wandb's writer
+    thread and the next wandb.log raised BrokenPipe through the training loop."""
+
+    def test_log_failure_is_swallowed_and_disables_wandb(self, monkeypatch, capsys):
+        class _Run:
+            id = "fake"
+
+        class _Wandb:
+            run = _Run()
+            calls = 0
+
+            @classmethod
+            def log(cls, payload):
+                cls.calls += 1
+                raise BrokenPipeError(32, "Broken pipe")
+
+        monkeypatch.setattr(rt, "wandb", _Wandb, raising=False)
+        monkeypatch.setattr(rt, "WANDB_AVAILABLE", True)
+        rt._wandb_log({"loss": 1.0})            # must not raise
+        assert rt.WANDB_AVAILABLE is False       # switched off after the first failure
+        rt._wandb_log({"loss": 2.0})            # and not retried
+        assert _Wandb.calls == 1
+        assert "wandb.log failed" in capsys.readouterr().out
+
+
+def test_epochs_zero_scores_the_saved_best_f1_checkpoint(tmp_path):
+    """--epochs 0 --test_checkpoint f1 is the EVAL_ONLY=1 path of the sbatch
+    script: no training, load <save>_bestf1.pth, write the predictions CSV.
+    Needed to score R3, which crashed at epoch 325 with its epoch-271 best saved."""
+    d, csv = _deposit_dir(tmp_path)
+    config = _trainer_config(tmp_path, d, csv, dict(epochs=1))
+    rt.train(config)
+    best = tmp_path / "m_bestf1.pth"
+    assert best.exists()
+    stamp = best.stat().st_mtime_ns
+    (tmp_path / "pred.csv").unlink()
+
+    config = _trainer_config(tmp_path, d, csv, dict(epochs=0))
+    best_val_loss, test_metrics = rt.train(config)
+    assert best_val_loss == float("inf")                  # nothing was trained
+    assert best.stat().st_mtime_ns == stamp               # nothing was overwritten
+    assert np.isfinite(test_metrics["f1_macro"])
+    assert len((tmp_path / "pred.csv").read_text().splitlines()) == 2
