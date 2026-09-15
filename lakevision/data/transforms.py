@@ -10,14 +10,22 @@ import torch
 # Each augmentation is a function: img_seq [T, C, H, W] -> img_seq [T, C, H, W]
 # All 7 non-identity elements of the dihedral group D4 (symmetries of a square):
 # 4 rotations (0°, 90°, 180°, 270°) × 2 reflections = 8 total, minus identity = 7
+# Named functions, not lambdas: DataLoader workers pickle the dataset under the
+# spawn start method (macOS, and Linux if it is ever switched), and lambdas
+# cannot be pickled. Found by the R15 Mac gate.
+def rot90(x):        return x.rot90(1, [-2, -1])            # 90° clockwise
+def rot180(x):       return x.rot90(2, [-2, -1])            # 180°
+def rot270(x):       return x.rot90(3, [-2, -1])            # 270° clockwise
+def flip_h(x):       return x.flip(-1)                       # horizontal flip
+def flip_v(x):       return x.flip(-2)                       # vertical flip
+def rot90_flip(x):   return x.rot90(1, [-2, -1]).flip(-1)   # 90° + horizontal flip
+def rot270_flip(x):  return x.rot90(3, [-2, -1]).flip(-1)   # 270° + horizontal flip
+
+
 AUGMENTATIONS = {
-    'rot90':       lambda x: x.rot90(1, [-2, -1]),               # 90° clockwise
-    'rot180':      lambda x: x.rot90(2, [-2, -1]),               # 180°
-    'rot270':      lambda x: x.rot90(3, [-2, -1]),               # 270° clockwise
-    'flip_h':      lambda x: x.flip(-1),                          # horizontal flip
-    'flip_v':      lambda x: x.flip(-2),                          # vertical flip
-    'rot90_flip':  lambda x: x.rot90(1, [-2, -1]).flip(-1),      # 90° + horizontal flip
-    'rot270_flip': lambda x: x.rot90(3, [-2, -1]).flip(-1),      # 270° + horizontal flip
+    'rot90': rot90, 'rot180': rot180, 'rot270': rot270,
+    'flip_h': flip_h, 'flip_v': flip_v,
+    'rot90_flip': rot90_flip, 'rot270_flip': rot270_flip,
 }
 
 

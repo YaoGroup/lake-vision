@@ -45,7 +45,8 @@ def band_names(nc):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--nc_dir", required=True, help="directory of {lake_id}.nc deposit files")
+    ap.add_argument("--nc_dir", required=True, nargs="+",
+                    help="director(ies) of {lake_id}.nc deposit files; each id is looked up in order")
     ap.add_argument("--ids_file", required=True, help="JSON list of lake ids (the TRAIN split)")
     ap.add_argument("--out", required=True, help="band_stats.json to write")
     ap.add_argument("--stride", type=int, default=4, help="pixel stride in y and x")
@@ -53,11 +54,13 @@ def main():
     args = ap.parse_args()
 
     ids = json.load(open(args.ids_file))
-    nc_dir = Path(args.nc_dir)
-    paths = [nc_dir / f"{lid}.nc" for lid in ids]
-    missing = [p for p in paths if not p.exists()]
+    nc_dirs = [Path(d) for d in args.nc_dir]
+    paths, missing = [], []
+    for lid in ids:
+        hit = next((d / f"{lid}.nc" for d in nc_dirs if (d / f"{lid}.nc").exists()), None)
+        (paths if hit is not None else missing).append(hit if hit is not None else lid)
     if missing:
-        sys.exit(f"ERROR: {len(missing)} of {len(paths)} files missing, e.g. {missing[0]}")
+        sys.exit(f"ERROR: {len(missing)} of {len(ids)} files missing from {[str(d) for d in nc_dirs]}, e.g. {missing[0]}")
 
     acc = {}   # channel -> [n, sum, sumsq]
     t0 = time.time()

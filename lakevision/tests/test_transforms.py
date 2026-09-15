@@ -144,3 +144,19 @@ class TestLoaderMemoryPlan:
         one = self._plan(batch_size=8, sample_mb=1224, host_mem_budget_gb=208,
                          max_workers=12, prefetch_factor=1)[0]
         assert one > two
+
+
+class _PicklableBase(torch.utils.data.Dataset):
+    def __len__(self): return 1
+    def __getitem__(self, i): return torch.zeros(2, 1, 4, 4), None, None, 0, "x"
+
+
+def test_augmentations_and_random_d4_dataset_pickle():
+    """Spawned DataLoader workers pickle the dataset; lambdas broke the R15 gate on macOS."""
+    import pickle
+    from lakevision.data.transforms import AUGMENTATIONS, RandomD4Dataset
+    for name, fn in AUGMENTATIONS.items():
+        assert pickle.loads(pickle.dumps(fn)) is fn, name
+
+    ds = pickle.loads(pickle.dumps(RandomD4Dataset(_PicklableBase(), seed=0)))
+    assert ds[0][0].shape == (2, 1, 4, 4)

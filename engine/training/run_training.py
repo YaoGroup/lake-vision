@@ -653,6 +653,7 @@ def train(config: dict):
     print(f"Epochs:         {config.get('epochs', 400)}")
     print(f"Batch size:     {config.get('batch_size', 8)}")
     print(f"Learning rate:  {config.get('lr', 1e-4)}")
+    print(f"Optimizer:      {config.get('optimizer', 'adam')}")
     print(f"Weight decay:   {config.get('weight_decay', 1e-5)}")
     print(f"AMP (bf16):     {config.get('amp', True)}")
     lr_schedule = config.get('lr_schedule', 'none')
@@ -1079,7 +1080,11 @@ def train(config: dict):
 
     # Loss and optimizer (weighted by inverse class frequency)
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-    optimizer = torch.optim.Adam(
+    # Adam's weight_decay is an L2 term folded into the gradient, which Adam's
+    # per-parameter scaling then largely cancels; AdamW applies decoupled decay
+    # and is what "weight decay" means as a regulariser (R13/R14).
+    opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[config.get("optimizer", "adam")]
+    optimizer = opt_cls(
         model.parameters(),
         lr=config.get("lr", 1e-4),
         weight_decay=config.get("weight_decay", 0.0),
@@ -1366,6 +1371,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4,
                         help="Fixed learning rate (no scheduler in ESSD baseline)")
     parser.add_argument("--weight_decay", type=float, default=1e-5)
+    parser.add_argument("--optimizer", type=str, default="adam", choices=["adam", "adamw"],
+                        help="adam (ESSD default: L2 via Adam's weight_decay) or adamw (decoupled decay)")
     parser.add_argument("--amp", action="store_true", default=True,
                         help="Use bf16 mixed-precision autocast for forward/backward "
                              "(A100+). Default True for ESSD baseline.")

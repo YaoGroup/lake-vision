@@ -50,6 +50,12 @@
 #            --export=ALL,EPOCHS=200,MEM_BUDGET=208,EXTRA_FLAGS="--prefetch_factor 1" engine/training/run_eleven_runs.sh
 #   Move or delete models/eleven/lakevision_eleven_R10*.pth first if any exist.
 #
+#   Combined-split runs R13 (40 GB), R14 and R15 (80 GB, cosine so EPOCHS=200),
+#   after the benchout band stats exist (sbatch engine/training/run_band_stats_benchout.sh):
+#     sbatch --array=13 --time=96:00:00 --dependency=afterok:<BAND_STATS_JOBID> engine/training/run_eleven_runs.sh
+#     sbatch --array=14-15 --time=96:00:00 --dependency=afterok:<BAND_STATS_JOBID> -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" \
+#            --mem=320GB --export=ALL,EPOCHS=200,MEM_BUDGET=208 engine/training/run_eleven_runs.sh
+#
 #   Score an existing best-F1 checkpoint on the test set without retraining
 #   (R3 crashed at epoch 325 on an Oak I/O error with its epoch-271 best saved):
 #     sbatch --array=2 --time=03:00:00 --export=ALL,EVAL_ONLY=1 engine/training/run_eleven_runs.sh
@@ -71,7 +77,7 @@
 
 set -euo pipefail
 
-ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10 R11 R12)   # 11, 12: the 40 GB follow-ups
+ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10 R11 R12 R13 R14 R15)   # 11, 12: 40 GB follow-ups; 13 (40 GB), 14-15 (80 GB): combined-split runs
 RUN="${ARRAY_RUNS[$SLURM_ARRAY_TASK_ID]}"
 SMOKE="${SMOKE:-0}"
 MEM_BUDGET="${MEM_BUDGET:-166}"     # ~65% of --mem, the loader queue's share
@@ -86,10 +92,9 @@ STACKS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilesta
 LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
 LABELS_2018="$LABELS_ROOT/labels_CW_2018.csv"
 LABELS_2019="$LABELS_ROOT/labels_CW_2019.csv"
-SPLITS_DIR="$REPO_DIR/splits/essd_CW_crossyear"
-export BAND_STATS="$SHERLOCK_DIR/band_stats/band_stats_crossyear_train.json"
-
 source "$REPO_DIR/engine/training/eleven_runs_matrix.sh"
+SPLITS_DIR="$REPO_DIR/splits/$(run_split "$RUN")"
+export BAND_STATS="$SHERLOCK_DIR/band_stats/$(run_band_stats_name "$RUN")"
 
 if [ "$SMOKE" = "1" ]; then
     TAG="eleven_smoke"; EXTRA="--epochs 5 --max_lakes 50"
@@ -110,8 +115,8 @@ done
 for d in "$STACKS_ROOT/CW_2018" "$STACKS_ROOT/CW_2019"; do
     [ -d "$d" ] || { echo "ERROR: missing stacks directory $d"; exit 1; }
 done
-case "$RUN" in R3|R10)
-    [ -f "$BAND_STATS" ] || { echo "ERROR: $RUN needs $BAND_STATS; run run_band_stats_crossyear.sh first"; exit 1; } ;;
+case "$RUN" in R3|R10|R13|R14|R15)
+    [ -f "$BAND_STATS" ] || { echo "ERROR: $RUN needs $BAND_STATS; run the matching run_band_stats_*.sh first"; exit 1; } ;;
 esac
 if [ "$EVAL_ONLY" = "1" ]; then
     [ -f "${SAVE_PATH%.pth}_bestf1.pth" ] || { echo "ERROR: EVAL_ONLY needs ${SAVE_PATH%.pth}_bestf1.pth"; exit 1; }
@@ -130,6 +135,7 @@ echo "Node:        $(hostname)   GPU: $(nvidia-smi --query-gpu=name,memory.total
 echo "Commit:      $GIT_SHA"
 echo "Flags:       $FLAGS"
 echo "Smoke:       $SMOKE   Eval-only: $EVAL_ONLY"
+echo "Split:       $SPLITS_DIR ($(python3 -c "import json;print(*(len(json.load(open('$SPLITS_DIR/'+n+'_ids.json'))) for n in ('train','val','test')))") train/val/test)"
 echo "Model save:  $SAVE_PATH"
 echo "Predictions: $PRED_CSV"
 echo "=============================================="

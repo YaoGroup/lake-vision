@@ -15,6 +15,15 @@ ELEVEN_RUNS=(R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10)
 # the readout is effectively a mean; suspect: gradient into all 153 steps with no
 # clipping). R11 isolates the readout; R12 is R1 with gradient clipping.
 EXTRA_RUNS=(R11 R12)
+# Added 2026-09-15 from the results: only R3 (standardised inputs) and R8 (soft
+# labels) beat R0 on the cross-year test. A three-step ladder, each step one change:
+#   R13 = R3 + R8 + the dynamic water mask + AdamW 1e-2, reference architecture
+#   R14 = R13 + R2's optimiser stack (fits to 0.98 train; does decay convert that?)
+#   R15 = R14 + random rot/flip augmentation (never used by any run so far)
+# All three train on the COMBINED 2018+2019 split with the 40 bench lakes held
+# out in test (splits/essd_CW_benchout), so they answer "what does a two-season
+# model do" and still go on the bench ladder. $BAND_STATS = the benchout stats.
+COMBINED_RUNS=(R13 R14 R15)
 COMMON_FLAGS="--no_mask --test_checkpoint f1"
 
 run_flags() {
@@ -32,13 +41,32 @@ run_flags() {
         R10) echo "$(run_flags R1) $(run_flags R2) $(run_flags R3) $(run_flags R4) $(run_flags R5) $(run_flags R6) $(run_flags R7) $(run_flags R8)" ;;
         R11) echo "--temporal_readout mean" ;;
         R12) echo "$(run_flags R1) --grad_clip 1.0" ;;
+        R13) echo "$(run_flags R3) $(run_flags R8) --mask_source dynamic --optimizer adamw --weight_decay 1e-2" ;;
+        R14) echo "$(run_flags R13) $(run_flags R2)" ;;
+        R15) echo "$(run_flags R14) --augment" ;;
         *)   echo "unknown run $1" >&2; return 1 ;;
     esac
 }
 
 run_gpu_class() {
     case "$1" in
-        R2|R9|R10) echo 80 ;;
-        *)         echo 40 ;;
+        R2|R9|R10|R14|R15) echo 80 ;;
+        *)                 echo 40 ;;
+    esac
+}
+
+# Which split directory (under splits/) a run trains on.
+run_split() {
+    case "$1" in
+        R13|R14|R15) echo "essd_CW_benchout" ;;
+        *)       echo "essd_CW_crossyear" ;;
+    esac
+}
+
+# Which band_stats file a run's --band_stats must point at (basename under band_stats/).
+run_band_stats_name() {
+    case "$1" in
+        R13|R14|R15) echo "band_stats_benchout_train.json" ;;
+        *)       echo "band_stats_crossyear_train.json" ;;
     esac
 }

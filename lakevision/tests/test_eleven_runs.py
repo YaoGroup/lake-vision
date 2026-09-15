@@ -460,3 +460,52 @@ def test_epochs_zero_scores_the_saved_best_f1_checkpoint(tmp_path):
     assert best.stat().st_mtime_ns == stamp               # nothing was overwritten
     assert np.isfinite(test_metrics["f1_macro"])
     assert len((tmp_path / "pred.csv").read_text().splitlines()) == 2
+
+
+class TestBenchHeldOutSplit:
+    def test_hold_out_moves_bench_lakes_to_test_and_loses_nothing(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine" / "training"))
+        from split_bench_heldout import hold_out
+        splits = {"train": ["a", "b", "c", "d"], "val": ["e", "f"], "test": ["g", "h"]}
+        new, moved = hold_out(splits, ["b", "e", "h"])
+        assert new["train"] == ["a", "c", "d"] and new["val"] == ["f"]
+        assert new["test"] == ["g", "h", "b", "e"]
+        assert moved == {"train": ["b"], "val": ["e"]}
+        assert sum(map(len, new.values())) == 8
+
+    def test_hold_out_refuses_unknown_ids(self):
+        from split_bench_heldout import hold_out
+        with pytest.raises(SystemExit):
+            hold_out({"train": ["a"], "val": [], "test": []}, ["zzz"])
+
+    def test_committed_benchout_split_is_consistent(self):
+        root = Path(__file__).resolve().parents[2]
+        d = root / "splits" / "essd_CW_benchout"
+        if not d.exists():
+            pytest.skip("benchout split not generated")
+        s = {n: json.load(open(d / f"{n}_ids.json")) for n in ("train", "val", "test")}
+        meta = json.load(open(d / "split_meta.json"))
+        held = set(meta["held_out_ids"])
+        assert len(held) == 40
+        assert held <= set(s["test"])
+        assert not held & (set(s["train"]) | set(s["val"]))
+        allids = s["train"] + s["val"] + s["test"]
+        assert len(allids) == len(set(allids)) == 1679
+        src = {n: json.load(open(root / "splits" / "essd_CW" / f"{n}_ids.json")) for n in ("train", "val", "test")}
+        assert set(allids) == set(src["train"] + src["val"] + src["test"])
+
+
+class TestOptimizerFlag:
+    @pytest.mark.parametrize("name,cls", [("adam", torch.optim.Adam), ("adamw", torch.optim.AdamW)])
+    def test_optimizer_choice(self, name, cls):
+        opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[name]
+        assert opt_cls is cls
+
+    def test_trainer_runs_with_adamw_and_augment(self, tmp_path):
+        d, csv = _deposit_dir(tmp_path)
+        config = _trainer_config(tmp_path, d, csv, dict(optimizer="adamw", weight_decay=1e-2, augment=True,
+                                                        augment_mode="random", mask_source="dynamic",
+                                                        soft_labels=True, fill="mean", validity_channel=True))
+        config["band_stats"] = str(tmp_path / "band_stats.json")
+        best_val_loss, test_metrics = rt.train(config)
+        assert np.isfinite(best_val_loss) and np.isfinite(test_metrics["f1_macro"])
