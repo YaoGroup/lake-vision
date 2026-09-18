@@ -56,6 +56,12 @@
 #     sbatch --array=14-15 --time=96:00:00 --dependency=afterok:<BAND_STATS_JOBID> -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" \
 #            --mem=320GB --export=ALL,EPOCHS=200,MEM_BUDGET=208 engine/training/run_eleven_runs.sh
 #
+#   R16 = R10's flags on the combined benchout split. 8 channels at 1,474 lakes
+#   per epoch needs the RAM for 10 workers to fit 200 epochs in 96 h, so ask for
+#   a 1 TB node (sh03-17n01/03/05/07):
+#     sbatch --array=16 --time=96:00:00 -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" --mem=600GB \
+#            --export=ALL,EPOCHS=200,MEM_BUDGET=390 engine/training/run_eleven_runs.sh
+#
 #   Score an existing best-F1 checkpoint on the test set without retraining
 #   (R3 crashed at epoch 325 on an Oak I/O error with its epoch-271 best saved):
 #     sbatch --array=2 --time=03:00:00 --export=ALL,EVAL_ONLY=1 engine/training/run_eleven_runs.sh
@@ -77,7 +83,7 @@
 
 set -euo pipefail
 
-ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10 R11 R12 R13 R14 R15)   # 11, 12: 40 GB follow-ups; 13 (40 GB), 14-15 (80 GB): combined-split runs
+ARRAY_RUNS=(R0 R1 R3 R4 R5 R6 R7 R8 R2 R9 R10 R11 R12 R13 R14 R15 R16)   # 11, 12: 40 GB follow-ups; 13 (40 GB), 14-16 (80 GB): combined-split runs
 RUN="${ARRAY_RUNS[$SLURM_ARRAY_TASK_ID]}"
 SMOKE="${SMOKE:-0}"
 MEM_BUDGET="${MEM_BUDGET:-166}"     # ~65% of --mem, the loader queue's share
@@ -115,7 +121,7 @@ done
 for d in "$STACKS_ROOT/CW_2018" "$STACKS_ROOT/CW_2019"; do
     [ -d "$d" ] || { echo "ERROR: missing stacks directory $d"; exit 1; }
 done
-case "$RUN" in R3|R10|R13|R14|R15)
+case "$RUN" in R3|R10|R13|R14|R15|R16)
     [ -f "$BAND_STATS" ] || { echo "ERROR: $RUN needs $BAND_STATS; run the matching run_band_stats_*.sh first"; exit 1; } ;;
 esac
 if [ "$EVAL_ONLY" = "1" ]; then

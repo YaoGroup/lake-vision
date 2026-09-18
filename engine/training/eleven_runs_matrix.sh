@@ -23,7 +23,13 @@ EXTRA_RUNS=(R11 R12)
 # All three train on the COMBINED 2018+2019 split with the 40 bench lakes held
 # out in test (splits/essd_CW_benchout), so they answer "what does a two-season
 # model do" and still go on the bench ladder. $BAND_STATS = the benchout stats.
-COMBINED_RUNS=(R13 R14 R15)
+# R16 added 2026-09-18: R10 (the stack) is the best cross-year model (test 0.471,
+# TBS 22), but R13-R15 are NOT R10 — they drop its attention readout, observed
+# flag, static mask, CBAM and extra bands on the evidence of the single-change
+# runs. Since R10 as a whole beat all of its parts, that pruning is a hypothesis,
+# not a result. R16 is R10's exact flags on the benchout split, so the combined
+# ladder has an apples-to-apples cell for the current best configuration.
+COMBINED_RUNS=(R13 R14 R15 R16)
 COMMON_FLAGS="--no_mask --test_checkpoint f1"
 
 run_flags() {
@@ -44,21 +50,22 @@ run_flags() {
         R13) echo "$(run_flags R3) $(run_flags R8) --mask_source dynamic --optimizer adamw --weight_decay 1e-2" ;;
         R14) echo "$(run_flags R13) $(run_flags R2)" ;;
         R15) echo "$(run_flags R14) --augment" ;;
+        R16) echo "$(run_flags R10)" ;;
         *)   echo "unknown run $1" >&2; return 1 ;;
     esac
 }
 
 run_gpu_class() {
     case "$1" in
-        R2|R9|R10|R14|R15) echo 80 ;;
-        *)                 echo 40 ;;
+        R2|R9|R10|R14|R15|R16) echo 80 ;;
+        *)                     echo 40 ;;
     esac
 }
 
 # Which split directory (under splits/) a run trains on.
 run_split() {
     case "$1" in
-        R13|R14|R15) echo "essd_CW_benchout" ;;
+        R13|R14|R15|R16) echo "essd_CW_benchout" ;;
         *)       echo "essd_CW_crossyear" ;;
     esac
 }
@@ -66,7 +73,7 @@ run_split() {
 # Which band_stats file a run's --band_stats must point at (basename under band_stats/).
 run_band_stats_name() {
     case "$1" in
-        R13|R14|R15) echo "band_stats_benchout_train.json" ;;
+        R13|R14|R15|R16) echo "band_stats_benchout_train.json" ;;
         *)       echo "band_stats_crossyear_train.json" ;;
     esac
 }
