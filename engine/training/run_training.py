@@ -676,10 +676,11 @@ def train(config: dict):
     print("\n--- SPECTRAL BANDS ---")
     print(f"use_nir:        {config.get('use_nir', False)}")
     print(f"use_swir16:     {config.get('use_swir16', False)}")
+    print(f"use_swir22:     {config.get('use_swir22', False)}")
 
     print("\n--- AUX CHANNELS / FILL ---")
     print(f"validity_channel: {config.get('validity_channel', False)}")
-    print(f"cloud_channel:    {config.get('cloud_channel', False)}")
+    print(f"cloud_channel:    {config.get('cloud_channel')}")
     print(f"mask_source:      {config.get('mask_source')}")
     print(f"fill:             {config.get('fill', 'zero')}")
 
@@ -923,11 +924,12 @@ def train(config: dict):
         'seq_len': config.get("seq_len", 153),
         'use_nir': config.get("use_nir", False),
         'use_swir16': config.get("use_swir16", False),
+        'use_swir22': config.get("use_swir22", False),
         'use_mask': not config.get("no_mask", False),
         'band_stats': config.get("band_stats"),
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
         'validity_channel': config.get("validity_channel", False),
-        'cloud_channel': config.get("cloud_channel", False),
+        'cloud_channel': config.get("cloud_channel"),
         'fill': config.get("fill", "zero"),
         'mask_source': config.get("mask_source"),
     }
@@ -1049,6 +1051,7 @@ def train(config: dict):
         seq_len=seq_len,
         use_nir=config.get("use_nir", False),
         use_swir16=config.get("use_swir16", False),
+        use_swir22=config.get("use_swir22", False),
         attention_type=config.get("attention_type", "none"),
         n_aux_channels=n_aux_channels,
         expect_channels=n_input_channels,
@@ -1474,15 +1477,19 @@ def main():
                         help="Learn per-timestep weights for cloudy_seq (requires --use_cloudyseq)")
     parser.add_argument("--use_nir", action="store_true", default=False,
                         help="Include NIR band")
+    parser.add_argument("--use_swir22", action="store_true", default=False,
+                        help="Include the SWIR22 band (the sixth and last band in the deposits)")
     parser.add_argument("--use_swir16", action="store_true", default=False,
                         help="Include SWIR16 band")
     parser.add_argument("--no_mask", action="store_true", default=False,
                         help="Disable mask band (required for raw sat-tile-stack NC files)")
-    parser.add_argument("--cloud_channel", action="store_true", default=False,
-                        help="Aux channel marking pixels not to trust: no acquisition, or the "
-                             "deposit's cloud_mask flags the pixel. Unlike --validity_channel "
-                             "this sees cloud-contaminated days, which is where 2018 and 2019 "
-                             "differ (67 vs 42 median cloudy days; missing days are equal).")
+    parser.add_argument("--cloud_channel", type=str, default=None, choices=["day", "pixel"],
+                        help="Aux channel marking what not to trust, the axis --validity_channel "
+                             "misses (2018 vs 2019: 67 vs 42 median cloudy days, while missing "
+                             "days are equal at 63 vs 62). 'day': the per-day p_water usability "
+                             "flag broadcast over the frame (lake-level, robust over ice). "
+                             "'pixel': the deposit's per-pixel cloud_mask, which is unreliable "
+                             "over bright ice -- ablation only.")
     parser.add_argument("--validity_channel", action="store_true", default=False,
                         help="Append a per-pixel observed flag (1 where red was finite) as an input channel.")
     parser.add_argument("--fill", type=str, default="zero", choices=["zero", "mean"],

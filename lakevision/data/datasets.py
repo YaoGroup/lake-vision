@@ -167,7 +167,7 @@ class LakeDataset(Dataset):
         preload_to_ram: bool = False,
         # Aux channels and fill policy (all off = ESSD-identical)
         validity_channel: bool = False,
-        cloud_channel: bool = False,
+        cloud_channel: Optional[str] = None,
         fill: str = 'zero',
         mask_source: Optional[str] = None,
     ):
@@ -187,6 +187,8 @@ class LakeDataset(Dataset):
             raise ValueError(f"fill must be 'zero' or 'mean', got '{fill}'")
         if mask_source not in (None, 'static', 'dynamic', 'both'):
             raise ValueError(f"mask_source must be None, 'static', 'dynamic' or 'both', got '{mask_source}'")
+        if cloud_channel not in (None, 'pixel', 'day'):
+            raise ValueError(f"cloud_channel must be None, 'pixel' or 'day', got '{cloud_channel}'")
         self.validity_channel = validity_channel
         self.cloud_channel = cloud_channel
         self.fill = fill
@@ -195,7 +197,8 @@ class LakeDataset(Dataset):
         self.load_dynamic_mask = mask_source in ('dynamic', 'both')
         self.aux_channel_names = (
             (['validity'] if validity_channel else [])
-            + (['unusable'] if cloud_channel else [])
+            + (['unusable'] if cloud_channel == 'pixel' else [])
+            + (['day_unusable'] if cloud_channel == 'day' else [])
             + (['mask_static'] if self.load_static_mask else [])
             + (['mask_dynamic'] if self.load_dynamic_mask else []))
         self.n_aux_channels = len(self.aux_channel_names)
@@ -382,23 +385,37 @@ class LakeDataset(Dataset):
             if self.validity_channel:
                 # Red is always channel 0 of channels_to_load.
                 aux_parts.append(np.isfinite(imagery[:, 0]).astype(np.float32))
-            if self.cloud_channel:
-                # "Do not trust this pixel today": no acquisition, OR an
-                # acquisition whose cloud mask flags the pixel.
+            if self.cloud_channel is not None:
+                # "Do not trust this, today" as a channel the conv stack can see.
                 #
-                # This is the channel the validity channel is NOT. Measured
+                # This is the axis --validity_channel is blind to. Measured
                 # 2026-09-18 over all 515 lateral-drainage deposits: the median
-                # lake has 63 (2018) / 62 (2019) days with no image at all --
-                # identical across years, and all the validity channel sees --
-                # but 67 (2018) vs 42 (2019) days where an image exists and is
-                # too cloudy to derive p_water. The entire cross-year shift
-                # lives in that second number, and until now it reached the
-                # network as ordinary-looking frames with nothing marking them.
-                if 'cloud_mask' not in nc.variables:
-                    raise ValueError(f"{fp}: cloud_channel asks for 'cloud_mask' but the file has none")
-                cloudy = np.asarray(nc.variables['cloud_mask'][:]) == 1
-                missing = ~np.isfinite(imagery[:, 0])
-                aux_parts.append((cloudy | missing).astype(np.float32))
+                # lake has 63 (2018) vs 62 (2019) days with no image at all --
+                # equal, and all the validity channel marks -- but 67 vs 42 days
+                # where an image exists and is too cloudy to derive p_water, and
+                # 28 vs 54 clear days. The whole cross-year shift is in those.
+                #
+                # 'day'   : the per-day usability flag broadcast over the frame,
+                #           1 = do not trust this day. Derived from p_water,
+                #           a lake-level aggregate, so it does not inherit the
+                #           per-pixel cloud mask's well-known unreliability over
+                #           bright ice. This is the default choice.
+                # 'pixel' : the deposit's own per-pixel cloud_mask, OR'd with
+                #           missing pixels. Kept for ablation; per-pixel cloud
+                #           detection over ice is unreliable, so prefer 'day'.
+                if self.cloud_channel == 'day':
+                    if 'p_water' not in nc.variables:
+                        raise ValueError(f"{fp}: cloud_channel='day' needs p_water")
+                    pw = np.asarray(nc.variables['p_water'][:], dtype=np.float32)
+                    flag = (~np.isfinite(pw)).astype(np.float32)        # [T]
+                    aux_parts.append(np.broadcast_to(
+                        flag[:, None, None], imagery.shape[0:1] + imagery.shape[2:]).copy())
+                else:
+                    if 'cloud_mask' not in nc.variables:
+                        raise ValueError(f"{fp}: cloud_channel='pixel' asks for 'cloud_mask' but the file has none")
+                    cloudy = np.asarray(nc.variables['cloud_mask'][:]) == 1
+                    missing = ~np.isfinite(imagery[:, 0])
+                    aux_parts.append((cloudy | missing).astype(np.float32))
             if self.load_static_mask:
                 if 'lake_boundary' not in nc.variables:
                     raise ValueError(f"{fp}: mask_source asks for 'lake_boundary' but the file has none")

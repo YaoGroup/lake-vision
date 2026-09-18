@@ -528,7 +528,7 @@ class TestCloudChannel:
         fp = tmp_path / "CW2019_0001.nc"
         write_deposit(fp, seed=1, blank_day=2, half_day=4)
         ds = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False,
-                         validity_channel=True, cloud_channel=True)
+                         validity_channel=True, cloud_channel="pixel")
         assert ds.aux_channel_names == ["validity", "unusable"]
         img = ds[0][0]
         n_spec = ds.n_spectral_channels
@@ -547,7 +547,7 @@ class TestCloudChannel:
         fp = tmp_path / "CW2019_0002.nc"
         write_deposit(fp, seed=2)
         a = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False)
-        b = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel=True)
+        b = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel="pixel")
         assert b.n_channels == a.n_channels + 1
         assert b[0][0].shape[1] == b.n_channels
 
@@ -555,7 +555,7 @@ class TestCloudChannel:
         fp = tmp_path / "CW2019_0003.nc"
         write_deposit(fp, seed=3, with_cloud=False)
         with pytest.raises(ValueError, match="cloud_mask"):
-            LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel=True)[0]
+            LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel="pixel")[0]
 
     def test_day_1_is_unusable_but_valid(self, tmp_path):
         """The whole point: an acquisition that exists and cannot be trusted.
@@ -566,8 +566,55 @@ class TestCloudChannel:
         fp = tmp_path / "CW2019_0004.nc"
         write_deposit(fp, seed=4)
         ds = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False,
-                         validity_channel=True, cloud_channel=True)
+                         validity_channel=True, cloud_channel="pixel")
         img = ds[0][0]
         n = ds.n_spectral_channels
         assert img[1, n].min() == 1.0        # validity: day 1 looks fully observed
         assert img[1, n + 1].min() == 1.0    # cloud: day 1 is entirely untrustworthy
+
+
+class TestDayCloudChannel:
+    """Josh's choice for the final run: the per-day usability flag broadcast over
+    the frame, NOT the per-pixel cloud mask (unreliable over bright ice)."""
+
+    def test_day_channel_is_constant_per_frame_and_tracks_p_water(self, tmp_path):
+        fp = tmp_path / "CW2019_0010.nc"
+        _, pw, _, _ = write_deposit(fp, seed=10)
+        ds = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel="day")
+        assert ds.aux_channel_names == ["day_unusable"]
+        ch = ds[0][0][:, ds.n_spectral_channels]
+        for t in range(T):
+            frame = ch[t]
+            assert frame.min() == frame.max(), f"day {t} is not constant over the frame"
+            assert float(frame.flatten()[0]) == float(not np.isfinite(pw[t]))
+
+    def test_day_channel_differs_from_pixel_channel(self, tmp_path):
+        """Day 1 has pixels and a full cloud mask: 'pixel' flags it, and so does
+        'day' only because p_water is NaN there. Day 3 is half-clouded per pixel
+        but p_water is finite, so the two channels must disagree."""
+        fp = tmp_path / "CW2019_0011.nc"
+        write_deposit(fp, seed=11)
+        day = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel="day")
+        pix = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel="pixel")
+        d = day[0][0][:, day.n_spectral_channels]
+        x = pix[0][0][:, pix.n_spectral_channels]
+        assert d[3].max() == 0.0          # p_water finite on day 3 -> trusted
+        assert x[3, : H // 2].min() == 1.0  # but half its pixels are flagged cloud
+        assert not bool(torch.equal(d, x))
+
+    def test_rejects_unknown_mode(self, tmp_path):
+        fp = tmp_path / "CW2019_0012.nc"
+        write_deposit(fp, seed=12)
+        with pytest.raises(ValueError, match="cloud_channel"):
+            LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel="cloudy")
+
+
+def test_final_pair_config_runs_end_to_end(tmp_path):
+    """R18: R10's configuration + swir22 + the broadcast day flag, batch 4 x accum 2."""
+    d, csv = _deposit_dir(tmp_path)
+    flags = dict(R10_FLAGS)
+    flags.update(use_swir22=True, cloud_channel="day", batch_size=2, accumulation_steps=2)
+    config = _trainer_config(tmp_path, d, csv, flags)
+    config["band_stats"] = str(tmp_path / "band_stats.json")
+    best_val_loss, test_metrics = rt.train(config)
+    assert np.isfinite(best_val_loss) and np.isfinite(test_metrics["f1_macro"])

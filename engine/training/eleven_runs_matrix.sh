@@ -36,6 +36,16 @@ EXTRA_RUNS=(R11 R12)
 # given marks the days where the years actually differ. R17 = R16 + the per-pixel
 # cloud mask as an aux channel.
 COMBINED_RUNS=(R13 R14 R15 R16 R17)
+# THE FINAL PAIR, 2026-09-18. One configuration, run twice: R19 = R18 + augment,
+# so the pair is the value-of-more-data result. The configuration is R10's (the
+# only combination that beat every one of its parts: cross-year test 0.471 and
+# TBS 22, against 0.454 for its best single change) moved to the combined split,
+# plus the two things the 2026-09-18 diagnosis and Josh asked for: the sixth band
+# and the per-day cloud flag broadcast as an image channel. Per-pixel cloud masks
+# are deliberately NOT used -- unreliable over bright ice. batch 4 x accum 2 is
+# the same gradient as batch 8 (no BatchNorm; GroupNorm is per-sample) and keeps
+# 10 channels inside 80 GB.
+FINAL_RUNS=(R18 R19)
 COMMON_FLAGS="--no_mask --test_checkpoint f1"
 
 run_flags() {
@@ -57,22 +67,24 @@ run_flags() {
         R14) echo "$(run_flags R13) $(run_flags R2)" ;;
         R15) echo "$(run_flags R14) --augment" ;;
         R16) echo "$(run_flags R10)" ;;
-        R17) echo "$(run_flags R16) --cloud_channel" ;;
+        R17) echo "$(run_flags R16) --cloud_channel pixel" ;;
+        R18) echo "$(run_flags R10) --use_swir22 --cloud_channel day --batch_size 4 --accumulation_steps 2" ;;
+        R19) echo "$(run_flags R18) --augment" ;;
         *)   echo "unknown run $1" >&2; return 1 ;;
     esac
 }
 
 run_gpu_class() {
     case "$1" in
-        R2|R9|R10|R14|R15|R16|R17) echo 80 ;;
-        *)                         echo 40 ;;
+        R2|R9|R10|R14|R15|R16|R17|R18|R19) echo 80 ;;
+        *)                                 echo 40 ;;
     esac
 }
 
 # Which split directory (under splits/) a run trains on.
 run_split() {
     case "$1" in
-        R13|R14|R15|R16|R17) echo "essd_CW_benchout" ;;
+        R13|R14|R15|R16|R17|R18|R19) echo "essd_CW_benchout" ;;
         *)       echo "essd_CW_crossyear" ;;
     esac
 }
@@ -80,7 +92,7 @@ run_split() {
 # Which band_stats file a run's --band_stats must point at (basename under band_stats/).
 run_band_stats_name() {
     case "$1" in
-        R13|R14|R15|R16|R17) echo "band_stats_benchout_train.json" ;;
+        R13|R14|R15|R16|R17|R18|R19) echo "band_stats_benchout_train.json" ;;
         *)       echo "band_stats_crossyear_train.json" ;;
     esac
 }
