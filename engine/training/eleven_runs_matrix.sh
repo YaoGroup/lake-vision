@@ -29,7 +29,13 @@ EXTRA_RUNS=(R11 R12)
 # runs. Since R10 as a whole beat all of its parts, that pruning is a hypothesis,
 # not a result. R16 is R10's exact flags on the benchout split, so the combined
 # ladder has an apples-to-apples cell for the current best configuration.
-COMBINED_RUNS=(R13 R14 R15 R16)
+# R17 added 2026-09-18. Measured over all 515 LD deposits: both years have the
+# same number of days with no image (63 vs 62 of 153), but 2018 has 67 days where
+# an image exists and is too cloudy to use against 2019's 42. --validity_channel
+# (isfinite red) only ever saw the first number, so nothing the network has been
+# given marks the days where the years actually differ. R17 = R16 + the per-pixel
+# cloud mask as an aux channel.
+COMBINED_RUNS=(R13 R14 R15 R16 R17)
 COMMON_FLAGS="--no_mask --test_checkpoint f1"
 
 run_flags() {
@@ -51,21 +57,22 @@ run_flags() {
         R14) echo "$(run_flags R13) $(run_flags R2)" ;;
         R15) echo "$(run_flags R14) --augment" ;;
         R16) echo "$(run_flags R10)" ;;
+        R17) echo "$(run_flags R16) --cloud_channel" ;;
         *)   echo "unknown run $1" >&2; return 1 ;;
     esac
 }
 
 run_gpu_class() {
     case "$1" in
-        R2|R9|R10|R14|R15|R16) echo 80 ;;
-        *)                     echo 40 ;;
+        R2|R9|R10|R14|R15|R16|R17) echo 80 ;;
+        *)                         echo 40 ;;
     esac
 }
 
 # Which split directory (under splits/) a run trains on.
 run_split() {
     case "$1" in
-        R13|R14|R15|R16) echo "essd_CW_benchout" ;;
+        R13|R14|R15|R16|R17) echo "essd_CW_benchout" ;;
         *)       echo "essd_CW_crossyear" ;;
     esac
 }
@@ -73,7 +80,7 @@ run_split() {
 # Which band_stats file a run's --band_stats must point at (basename under band_stats/).
 run_band_stats_name() {
     case "$1" in
-        R13|R14|R15|R16) echo "band_stats_benchout_train.json" ;;
+        R13|R14|R15|R16|R17) echo "band_stats_benchout_train.json" ;;
         *)       echo "band_stats_crossyear_train.json" ;;
     esac
 }

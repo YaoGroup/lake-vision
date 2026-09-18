@@ -34,8 +34,13 @@ BANDS = ["B04", "B03", "B02", "B08", "B11", "B12"]
 STATS = {c: {"mean": 5000.0, "std": 2000.0} for c in ["red", "green", "blue", "nir", "swir16", "swir22"]}
 
 
-def write_deposit(fp, seed=0, blank_day=2, half_day=4):
-    """Miniature stacks_v2 file: 6 bands, p_water with NaNs, both masks."""
+def write_deposit(fp, seed=0, blank_day=2, half_day=4, with_cloud=True):
+    """Miniature stacks_v2 file: 6 bands, p_water with NaNs, both masks, cloud mask.
+
+    The cloud mask is deliberately independent of the NaN pattern: day 1 is fully
+    clouded and day 3 half clouded, yet both have pixels. That is the real case
+    the validity channel cannot see -- an acquisition exists and is unusable.
+    """
     rng = np.random.default_rng(seed)
     refl = rng.uniform(1000, 9000, (T, 6, H, W)).astype(np.float32)
     refl[blank_day] = np.nan                 # no scene
@@ -43,6 +48,7 @@ def write_deposit(fp, seed=0, blank_day=2, half_day=4):
     pw = np.array([np.nan, 0.2, np.nan, 0.9, np.nan, 0.4], np.float32)
     lb = np.zeros((H, W), np.uint8); lb[2:6, 2:6] = 1
     wm = np.zeros((T, H, W), np.uint8); wm[:, 3:5, 3:5] = 1; wm[blank_day] = 255
+    cm = np.zeros((T, H, W), np.uint8); cm[1] = 1; cm[3, : H // 2] = 1
     with netCDF4.Dataset(fp, "w") as nc:
         for n, s in [("time", T), ("band", 6), ("y", H), ("x", W), ("string3", 3)]:
             nc.createDimension(n, s)
@@ -54,6 +60,8 @@ def write_deposit(fp, seed=0, blank_day=2, half_day=4):
         v = nc.createVariable("p_water", "f4", ("time",)); v[:] = pw
         v = nc.createVariable("lake_boundary", "u1", ("y", "x")); v[:] = lb
         v = nc.createVariable("water_mask_ndwi", "u1", ("time", "y", "x"), fill_value=255); v[:] = wm
+        if with_cloud:
+            v = nc.createVariable("cloud_mask", "u1", ("time", "y", "x")); v[:] = cm
     return refl, pw, lb, wm
 
 
@@ -509,3 +517,57 @@ class TestOptimizerFlag:
         config["band_stats"] = str(tmp_path / "band_stats.json")
         best_val_loss, test_metrics = rt.train(config)
         assert np.isfinite(best_val_loss) and np.isfinite(test_metrics["f1_macro"])
+
+
+class TestCloudChannel:
+    """The channel --validity_channel is not: it marks cloud-contaminated days,
+    which is where 2018 and 2019 differ (67 vs 42 median cloudy days of 153;
+    days with no image at all are equal, 63 vs 62)."""
+
+    def test_cloud_channel_marks_cloud_and_missing(self, tmp_path):
+        fp = tmp_path / "CW2019_0001.nc"
+        write_deposit(fp, seed=1, blank_day=2, half_day=4)
+        ds = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False,
+                         validity_channel=True, cloud_channel=True)
+        assert ds.aux_channel_names == ["validity", "unusable"]
+        img = ds[0][0]
+        n_spec = ds.n_spectral_channels
+        validity = img[:, n_spec]
+        unusable = img[:, n_spec + 1]
+        # day 1: clouded everywhere -> unusable, but the pixels do exist -> valid
+        assert unusable[1].min() == 1.0
+        # day 3: half clouded
+        assert unusable[3, : H // 2].min() == 1.0 and unusable[3, H // 2:].max() == 0.0
+        # the blank day has no acquisition: unusable even though cloud_mask is 0
+        assert unusable[2].min() == 1.0 and validity[2].max() == 0.0
+        # unusable must be a superset of "not valid"
+        assert bool(((validity == 0) <= (unusable == 1)).all())
+
+    def test_cloud_channel_adds_one_channel(self, tmp_path):
+        fp = tmp_path / "CW2019_0002.nc"
+        write_deposit(fp, seed=2)
+        a = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False)
+        b = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel=True)
+        assert b.n_channels == a.n_channels + 1
+        assert b[0][0].shape[1] == b.n_channels
+
+    def test_missing_cloud_mask_raises(self, tmp_path):
+        fp = tmp_path / "CW2019_0003.nc"
+        write_deposit(fp, seed=3, with_cloud=False)
+        with pytest.raises(ValueError, match="cloud_mask"):
+            LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False, cloud_channel=True)[0]
+
+    def test_day_1_is_unusable_but_valid(self, tmp_path):
+        """The whole point: an acquisition that exists and cannot be trusted.
+
+        --validity_channel calls day 1 fine; --cloud_channel does not. Over the
+        515 real LD deposits that distinction is 67 days a year in 2018 against
+        42 in 2019, while the days both agree are missing are equal (63 vs 62)."""
+        fp = tmp_path / "CW2019_0004.nc"
+        write_deposit(fp, seed=4)
+        ds = LakeDataset([str(fp)], seq_len=T, label=0, use_mask=False,
+                         validity_channel=True, cloud_channel=True)
+        img = ds[0][0]
+        n = ds.n_spectral_channels
+        assert img[1, n].min() == 1.0        # validity: day 1 looks fully observed
+        assert img[1, n + 1].min() == 1.0    # cloud: day 1 is entirely untrustworthy

@@ -679,6 +679,7 @@ def train(config: dict):
 
     print("\n--- AUX CHANNELS / FILL ---")
     print(f"validity_channel: {config.get('validity_channel', False)}")
+    print(f"cloud_channel:    {config.get('cloud_channel', False)}")
     print(f"mask_source:      {config.get('mask_source')}")
     print(f"fill:             {config.get('fill', 'zero')}")
 
@@ -926,6 +927,7 @@ def train(config: dict):
         'band_stats': config.get("band_stats"),
         'cloudy_seq_var': config.get("cloudy_seq_var", "cloudy_seq_rgb"),
         'validity_channel': config.get("validity_channel", False),
+        'cloud_channel': config.get("cloud_channel", False),
         'fill': config.get("fill", "zero"),
         'mask_source': config.get("mask_source"),
     }
@@ -1476,6 +1478,11 @@ def main():
                         help="Include SWIR16 band")
     parser.add_argument("--no_mask", action="store_true", default=False,
                         help="Disable mask band (required for raw sat-tile-stack NC files)")
+    parser.add_argument("--cloud_channel", action="store_true", default=False,
+                        help="Aux channel marking pixels not to trust: no acquisition, or the "
+                             "deposit's cloud_mask flags the pixel. Unlike --validity_channel "
+                             "this sees cloud-contaminated days, which is where 2018 and 2019 "
+                             "differ (67 vs 42 median cloudy days; missing days are equal).")
     parser.add_argument("--validity_channel", action="store_true", default=False,
                         help="Append a per-pixel observed flag (1 where red was finite) as an input channel.")
     parser.add_argument("--fill", type=str, default="zero", choices=["zero", "mean"],

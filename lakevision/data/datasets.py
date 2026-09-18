@@ -167,6 +167,7 @@ class LakeDataset(Dataset):
         preload_to_ram: bool = False,
         # Aux channels and fill policy (all off = ESSD-identical)
         validity_channel: bool = False,
+        cloud_channel: bool = False,
         fill: str = 'zero',
         mask_source: Optional[str] = None,
     ):
@@ -187,12 +188,14 @@ class LakeDataset(Dataset):
         if mask_source not in (None, 'static', 'dynamic', 'both'):
             raise ValueError(f"mask_source must be None, 'static', 'dynamic' or 'both', got '{mask_source}'")
         self.validity_channel = validity_channel
+        self.cloud_channel = cloud_channel
         self.fill = fill
         self.mask_source = mask_source
         self.load_static_mask = mask_source in ('static', 'both')
         self.load_dynamic_mask = mask_source in ('dynamic', 'both')
         self.aux_channel_names = (
             (['validity'] if validity_channel else [])
+            + (['unusable'] if cloud_channel else [])
             + (['mask_static'] if self.load_static_mask else [])
             + (['mask_dynamic'] if self.load_dynamic_mask else []))
         self.n_aux_channels = len(self.aux_channel_names)
@@ -379,6 +382,23 @@ class LakeDataset(Dataset):
             if self.validity_channel:
                 # Red is always channel 0 of channels_to_load.
                 aux_parts.append(np.isfinite(imagery[:, 0]).astype(np.float32))
+            if self.cloud_channel:
+                # "Do not trust this pixel today": no acquisition, OR an
+                # acquisition whose cloud mask flags the pixel.
+                #
+                # This is the channel the validity channel is NOT. Measured
+                # 2026-09-18 over all 515 lateral-drainage deposits: the median
+                # lake has 63 (2018) / 62 (2019) days with no image at all --
+                # identical across years, and all the validity channel sees --
+                # but 67 (2018) vs 42 (2019) days where an image exists and is
+                # too cloudy to derive p_water. The entire cross-year shift
+                # lives in that second number, and until now it reached the
+                # network as ordinary-looking frames with nothing marking them.
+                if 'cloud_mask' not in nc.variables:
+                    raise ValueError(f"{fp}: cloud_channel asks for 'cloud_mask' but the file has none")
+                cloudy = np.asarray(nc.variables['cloud_mask'][:]) == 1
+                missing = ~np.isfinite(imagery[:, 0])
+                aux_parts.append((cloudy | missing).astype(np.float32))
             if self.load_static_mask:
                 if 'lake_boundary' not in nc.variables:
                     raise ValueError(f"{fp}: mask_source asks for 'lake_boundary' but the file has none")
