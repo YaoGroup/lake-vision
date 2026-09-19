@@ -8,8 +8,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=320GB
-#SBATCH -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB"
+#SBATCH --mem=256GB
+#SBATCH -C GPU_SKU:A100_SXM4
 #SBATCH --array=0-7
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jrines@stanford.edu
@@ -119,7 +119,8 @@
 # this baseline as architecturally unchanged -- it is not.
 #
 # Otherwise unchanged: 4-layer FrontCNN base 8, CLSTM hidden 32, last-step
-# readout, hard labels (--soft_labels is incompatible with --merge_classes), batch 8, Adam 1e-4, weight decay 1e-5, 400 epochs,
+# readout, hard labels (--soft_labels is incompatible with --merge_classes),
+# effective batch 8, Adam 1e-4, weight decay 1e-5, 400 epochs,
 # seed 42, bf16 AMP; test scored on the best-val-macro-F1 checkpoint.
 # Do NOT substitute AdamW at 1e-2: that decay is the main reason R14 reaches
 # only train 0.794 despite containing all of R2's stack.
@@ -128,10 +129,20 @@
 #     sbatch engine/training/run_band_stats_essd.sh
 #     sbatch --dependency=afterok:<BAND_STATS_JOBID> engine/training/run_essd_revision.sh
 #
-#   R2 peaked at 54 GB on 3 channels and R10 at 69 GB on 8, so 5 channels needs
-#   the 80 GB pool. ~12 min/epoch over 800 lakes puts 400 epochs near the 96 h
-#   wall; the best-F1 checkpoint is written continuously, so hitting the wall
-#   costs only the test table. Recover it without retraining:
+#   GPU MEMORY. GroupNorm roughly doubles the activation footprint: R2 peaked at
+#   54 GB on 3 channels where R0/R3 sat at 27-28 GB, and augmentation adds
+#   nothing (R15 = R14 = 57.7 GB; it is a CPU-side transform). At batch 8 every
+#   cell here needs the 80 GB pool -- six nodes, and on 2026-09-19 a four-node
+#   80 GB job had been unable to start for four days, holding the pool. So the
+#   default is batch 4 x accumulation 2 on ANY A100: the gradient is identical
+#   (no BatchNorm; GroupNorm is per-sample; 600 train lakes = 150 batches of 4,
+#   divisible by 2) and peak memory is ~30 GB. The 40 GB nodes are ~40% slower
+#   per epoch (loader-bound, weaker CPUs: R3 563 s vs R2 394 s), so 400 epochs
+#   is ~65-80 h. To run batch 8 on the 80 GB pool instead:
+#     sbatch -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB" --mem=320GB \
+#            --export=ALL,MEM_BUDGET=208,BATCH=8,ACCUM=1 engine/training/run_essd_revision.sh
+#   The best-F1 checkpoint is written continuously, so hitting the wall costs
+#   only the test table. Recover it without retraining:
 #     sbatch --array=<task> --time=03:00:00 --export=ALL,EVAL_ONLY=1 engine/training/run_essd_revision.sh
 # =============================================================================
 set -euo pipefail
@@ -141,7 +152,9 @@ RUNS=(y2019_5c_pw_aug  y2019_5c_pw_noaug  y2019_5c_nopw_aug  y2019_5c_nopw_noaug
 RUN="${RUNS[$SLURM_ARRAY_TASK_ID]}"
 EPOCHS="${EPOCHS:-400}"
 NUM_WORKERS="${NUM_WORKERS:-12}"
-MEM_BUDGET="${MEM_BUDGET:-208}"
+MEM_BUDGET="${MEM_BUDGET:-166}"
+BATCH="${BATCH:-4}"
+ACCUM="${ACCUM:-2}"
 EVAL_ONLY="${EVAL_ONLY:-0}"
 SEED="${SEED:-42}"
 
@@ -201,6 +214,7 @@ echo "Split:       $SPLITS_DIR"
 echo "Imagery:     $STACKS_ROOT/CW_2019  (stacks_v2 deposit, as published to the SDR)"
 echo "Band stats:  $STATS"
 echo "Classes:     ${CLS:-5-class}   p_water: ${AREA:-in}   Augment: ${AUG:-off}   Seed: $SEED   Eval-only: $EVAL_ONLY"
+echo "Batch:       $BATCH x $ACCUM accumulation (effective 8)"
 echo "Model save:  $SAVE_PATH"
 echo "=============================================="
 
@@ -234,6 +248,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --no_mask --mask_source static \
     $R2_FLAGS $R3_FLAGS \
     --test_checkpoint f1 --seed "$SEED" \
+    --batch_size "$BATCH" --accumulation_steps "$ACCUM" \
     --host_mem_budget_gb "$MEM_BUDGET" --num_workers "$NUM_WORKERS" \
     --wandb_name "essd_rev_${RUN}" \
     --save_path "$SAVE_PATH" \
