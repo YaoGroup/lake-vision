@@ -473,6 +473,9 @@ def train_one_epoch(model, loader, optimizer, criterion, device, num_classes=4,
         'precision_macro': precision_score(all_labels, all_preds, average='macro', zero_division=0),
         'recall_macro': recall_score(all_labels, all_preds, average='macro', zero_division=0),
         'f1_macro': f1_score(all_labels, all_preds, average='macro', zero_division=0),
+        # Same shape as evaluate()'s. Under --augment these are predictions on
+        # the augmented samples the model actually saw this epoch.
+        'confusion_matrix': confusion_matrix(all_labels, all_preds, labels=list(range(num_classes))),
         'grad_norm_max': max(grad_norms) if grad_norms else 0.0,
         'grad_norm_mean': float(np.mean(grad_norms)) if grad_norms else 0.0,
     }
@@ -1209,6 +1212,19 @@ def train(config: dict):
 
         # Print confusion matrix and per-class metrics every 10 epochs (and first epoch)
         if (epoch + 1) == 1 or (epoch + 1) % 10 == 0:
+            # Train first, then validation, in the same format. Headers differ
+            # ('Train ...' vs 'Validation ...') so log parsers can tell them apart.
+            cm = train_metrics['confusion_matrix']
+            print(f"\n  Train Confusion Matrix (epoch {epoch+1}):")
+            print(f"  Classes: {CLASS_NAMES[:num_classes]}")
+            print(f"  (rows=true, cols=pred)")
+            for i, row in enumerate(cm):
+                print(f"    {CLASS_NAMES[i]}: {row}")
+            print(f"\n  Train per-class metrics:")
+            print(f"  {'Class':8} {'Prec':>8} {'Recall':>8} {'F1':>8}")
+            for i, class_name in enumerate(CLASS_NAMES[:num_classes]):
+                print(f"  {class_name:8} {train_metrics[f'precision_{class_name}']:>8.3f} {train_metrics[f'recall_{class_name}']:>8.3f} {train_metrics[f'f1_{class_name}']:>8.3f}")
+
             cm = val_metrics['confusion_matrix']
             print(f"\n  Validation Confusion Matrix (epoch {epoch+1}):")
             print(f"  Classes: {CLASS_NAMES[:num_classes]}")
