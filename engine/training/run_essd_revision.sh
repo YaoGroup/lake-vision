@@ -43,15 +43,17 @@
 # bands 0-2 = B04/B03/B02, `lake_boundary` = the static Dunmire polygon that was
 # the composites' `mask` channel, and `p_water` = the composites' `water_area`.
 #
-# THE PROTOCOL IS 2019-ONLY (600/200/200 of the 1,000 CW2019 lakes). The
-# published cross-year and combined protocols leak: a CW2018 lake's nearest
-# CW2019 lake is a median 110 m away and 47% are within 100 m, i.e. the same
-# basin refilling, so a model trained on one year has seen the other year's
-# test sites. Within CW2019 no two lakes are within 500 m of each other, so the
-# single-year protocol removes that leakage entirely with no spatial blocking
-# and no buffered subsetting. Cross-year generalisation, the melt-season shift
-# and the cloud-observability diagnosis move to the discussion. Tasks 2-5 still
-# reproduce the published protocols if they are wanted for reference.
+# THE PROTOCOL IS 2019-ONLY (600/200/200 of the 1,000 CW2019 lakes). This
+# baseline exists to show that the deposited dataset ingests cleanly and
+# supports the drainage-classification task it was built for -- it is a
+# usability demonstration, not a modelling contribution. A single-season
+# within-year split is the simplest thing that demonstrates it, and scoping it
+# that way is the reason the section can be short, which is what R1-M2 asked
+# for. Whether a model trained on one melt season transfers to another is a
+# research question, not a dataset-descriptor question; it belongs to the JSTARS
+# follow-on, together with the cloud-observability diagnosis that explains why
+# it currently does not. Tasks 4-7 still reproduce the published cross-year and
+# combined protocols if they are wanted for reference.
 #
 # Changes from the published runs, all deliberate and all disclosable:
 #   - band standardisation on the TRAIN split + train-mean NaN fill + a
