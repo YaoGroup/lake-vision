@@ -10,22 +10,35 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=320GB
 #SBATCH -C "GPU_SKU:A100_SXM4&GPU_MEM:80GB"
-#SBATCH --array=0-3
+#SBATCH --array=0-7
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jrines@stanford.edu
 
 # =============================================================================
-# ESSD REVISION -- a 2x2 on the 2019 season
+# ESSD REVISION -- a 2x2x2 on the 2019 season (branch essd/revision01)
 #
-#   task 0  y2019_pw_aug      p_water in,  augmentation on
-#   task 1  y2019_pw_noaug    p_water in,  augmentation off
-#   task 2  y2019_nopw_aug    p_water out, augmentation on
-#   task 3  y2019_nopw_noaug  p_water out, augmentation off
+#   task 0  y2019_5c_pw_aug       5-class, p_water in,  augmentation on
+#   task 1  y2019_5c_pw_noaug     5-class, p_water in,  augmentation off
+#   task 2  y2019_5c_nopw_aug     5-class, p_water out, augmentation on
+#   task 3  y2019_5c_nopw_noaug   5-class, p_water out, augmentation off
+#   task 4  y2019_4c_pw_aug       4-class (HF+MD merged), p_water in,  aug on
+#   task 5  y2019_4c_pw_noaug     4-class, p_water in,  aug off
+#   task 6  y2019_4c_nopw_aug     4-class, p_water out, aug on
+#   task 7  y2019_4c_nopw_noaug   4-class, p_water out, aug off
 #
-# p_water in/out answers reviewer request R3-G1. augment on/off is the data
-# question, and in a 2x2 each main effect is estimated from two independent
-# pairs rather than one, which is why this is worth more than two runs plus a
-# seed replicate.
+# Three axes, fully crossed, so each main effect is estimated from four
+# independent pairs:
+#   class scheme  5-class is the deposit's schema and stays the baseline; the
+#                 4-class run merges HF into MD's partner (--merge_classes HF MD
+#                 -> 'HFMD'). Both drain water into the ice, so they share their
+#                 ice-dynamics implication, and a human can separate them
+#                 afterwards. The model cannot: 29-43% of MD lakes are called HF
+#                 across every run, while annotators assign them p_MD = 0.92
+#                 (91% of the 521 HF/MD lakes are unanimous within the pair).
+#                 Post-hoc merging of existing predictions gains +0.07..+0.13
+#                 macro-F1; retraining lets the model spend that capacity.
+#   p_water       in/out answers reviewer request R3-G1.
+#   augmentation  on/off is the data question (see below).
 #
 # WHY THIS CONFIGURATION (the R2 + R3 pairing), decided 2026-09-19:
 # the published baseline cannot fit its own training data. Final-epoch train
@@ -106,7 +119,7 @@
 # this baseline as architecturally unchanged -- it is not.
 #
 # Otherwise unchanged: 4-layer FrontCNN base 8, CLSTM hidden 32, last-step
-# readout, hard labels, batch 8, Adam 1e-4, weight decay 1e-5, 400 epochs,
+# readout, hard labels (--soft_labels is incompatible with --merge_classes), batch 8, Adam 1e-4, weight decay 1e-5, 400 epochs,
 # seed 42, bf16 AMP; test scored on the best-val-macro-F1 checkpoint.
 # Do NOT substitute AdamW at 1e-2: that decay is the main reason R14 reaches
 # only train 0.794 despite containing all of R2's stack.
@@ -123,7 +136,8 @@
 # =============================================================================
 set -euo pipefail
 
-RUNS=(y2019_pw_aug y2019_pw_noaug y2019_nopw_aug y2019_nopw_noaug)
+RUNS=(y2019_5c_pw_aug  y2019_5c_pw_noaug  y2019_5c_nopw_aug  y2019_5c_nopw_noaug
+      y2019_4c_pw_aug  y2019_4c_pw_noaug  y2019_4c_nopw_aug  y2019_4c_nopw_noaug)
 RUN="${RUNS[$SLURM_ARRAY_TASK_ID]}"
 EPOCHS="${EPOCHS:-400}"
 NUM_WORKERS="${NUM_WORKERS:-12}"
@@ -149,6 +163,10 @@ esac
 case "$RUN" in
   *_noaug)   AUG="" ;;
   *)         AUG="--augment --augment_mode random" ;;
+esac
+case "$RUN" in
+  *_4c_*)    CLS="--merge_classes HF MD" ;;   # num_classes becomes 4 automatically
+  *)         CLS="" ;;
 esac
 
 SPLITS_DIR="$REPO_DIR/splits/$SPLIT"
@@ -182,7 +200,7 @@ echo "Commit:      $GIT_SHA"
 echo "Split:       $SPLITS_DIR"
 echo "Imagery:     $STACKS_ROOT/CW_2019  (stacks_v2 deposit, as published to the SDR)"
 echo "Band stats:  $STATS"
-echo "p_water:     ${AREA:-in}   Augment: ${AUG:-off}   Seed: $SEED   Eval-only: $EVAL_ONLY"
+echo "Classes:     ${CLS:-5-class}   p_water: ${AREA:-in}   Augment: ${AUG:-off}   Seed: $SEED   Eval-only: $EVAL_ONLY"
 echo "Model save:  $SAVE_PATH"
 echo "=============================================="
 
@@ -220,7 +238,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --wandb_name "essd_rev_${RUN}" \
     --save_path "$SAVE_PATH" \
     --test_predictions_csv "$PRED_CSV" \
-    $AREA $AUG $EXTRA && EXIT_CODE=0 || EXIT_CODE=$?
+    $CLS $AREA $AUG $EXTRA && EXIT_CODE=0 || EXIT_CODE=$?
 
 DUR=$(( $(date +%s) - START_TIME ))
 echo "=============================================="
