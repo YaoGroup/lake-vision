@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256GB
 #SBATCH -C GPU_SKU:A100_SXM4
-#SBATCH --array=0-3
+#SBATCH --array=0-2
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jrines@stanford.edu
 
@@ -18,12 +18,23 @@
 # ESSD REVISION RUNS
 #
 # Scope is deliberately narrow. The reviewers asked for LESS model content, so
-# this is the published baseline plus (a) input standardisation, which is
-# preprocessing hygiene rather than a modelling change, and (b) the one
-# ablation a reviewer explicitly requested: does the p_water area stream
-# contribute (R3-G1)? Nothing else. Soft labels, augmentation, the stride-1
-# FrontCNN and the stacked configuration all belong to the JSTARS follow-on
+# this is the published architecture plus (a) input standardisation, which is
+# preprocessing hygiene rather than a modelling change, (b) the one ablation a
+# reviewer explicitly requested -- does the p_water area stream contribute
+# (R3-G1) -- and (c) random D4 augmentation. Soft labels, the stride-1 FrontCNN
+# and the stacked configuration belong to the JSTARS follow-on
 # (docs/eleven_runs/ELEVEN_RUNS.html), not here.
+#
+# THE PROTOCOL IS 2019-ONLY (600/200/200 of the 1,000 CW2019 lakes). The
+# published cross-year and combined protocols leak: a CW2018 lake's nearest
+# CW2019 lake is a median 110 m away and 47% are within 100 m, i.e. the same
+# basin refilling, so a model trained on one year has seen the other year's
+# test sites. Within CW2019 no two lakes are within 500 m of each other (the
+# closest test-to-train pair in this split is 600 m, median 3.4 km), so the
+# single-year protocol removes that leakage entirely with no spatial blocking
+# and no buffered subsetting. Cross-year generalisation, the melt-season shift
+# and the cloud-observability diagnosis move to the discussion. Tasks 3-6 still
+# reproduce the published protocols if they are wanted for reference.
 #
 # Everything else matches the published runs exactly, because the revision's
 # tables have to stay comparable to the frozen essd-2026-submission tag:
@@ -38,6 +49,7 @@
 #   Band statistics first (composites, per protocol), then this:
 #     sbatch engine/training/run_band_stats_essd.sh
 #     sbatch --dependency=afterok:<BAND_STATS_JOBID> engine/training/run_essd_revision.sh
+#   Tasks: 0 baseline, 1 no p_water (R3-G1), 2 augmented.
 #
 #   Score a saved best-F1 checkpoint without retraining (the combined runs are
 #   close to the 96 h wall; if one is killed, this writes its test table):
@@ -45,7 +57,7 @@
 # =============================================================================
 set -euo pipefail
 
-RUNS=(crossyear_base crossyear_noarea combined_base combined_noarea)
+RUNS=(y2019_base y2019_noarea y2019_augment crossyear_base crossyear_noarea combined_base combined_noarea)
 RUN="${RUNS[$SLURM_ARRAY_TASK_ID]}"
 EPOCHS="${EPOCHS:-400}"
 NUM_WORKERS="${NUM_WORKERS:-12}"
@@ -58,12 +70,14 @@ COMPOSITES="$SHERLOCK_DIR/composites"
 LABELS_ROOT="/oak/stanford/groups/cyaolai/JoshRines/data/essd_labels"
 
 case "$RUN" in
+  y2019_*)     SPLIT="essd_CW_2019only";  STATS="$SHERLOCK_DIR/band_stats/band_stats_essd_2019only_composites.json" ;;
   crossyear_*) SPLIT="essd_CW_crossyear"; STATS="$SHERLOCK_DIR/band_stats/band_stats_essd_crossyear_composites.json" ;;
   combined_*)  SPLIT="essd_CW";           STATS="$SHERLOCK_DIR/band_stats/band_stats_essd_combined_composites.json" ;;
 esac
 case "$RUN" in
-  *_noarea) ABLATION="--no_areaseq" ;;
-  *)        ABLATION="" ;;
+  *_noarea)  ABLATION="--no_areaseq" ;;
+  *_augment) ABLATION="--augment --augment_mode random" ;;
+  *)         ABLATION="" ;;
 esac
 
 SPLITS_DIR="$REPO_DIR/splits/$SPLIT"

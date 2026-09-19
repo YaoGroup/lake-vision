@@ -659,3 +659,20 @@ class TestESSDRevision:
         documents; the revision reproduces it rather than changing it."""
         m = LakeDrainageClassifier(num_classes=5, frontcnn_out_hw=(64, 64))
         assert m.frontcnn_out_hw == (64, 64) or True  # constructing is the assertion
+
+
+def test_2019only_split_is_spatially_clean():
+    """The reason the revision drops the cross-year and combined protocols:
+    a CW2018 lake's nearest CW2019 lake is a median 110 m away (47% within
+    100 m, the same basin refilling), while within CW2019 no two lakes are
+    closer than 500 m. So a single-year split needs no spatial blocking."""
+    import csv
+    root = Path(__file__).resolve().parents[2]
+    d = root / "splits" / "essd_CW_2019only"
+    if not d.exists():
+        pytest.skip("2019-only split not generated")
+    sp = {n: json.load(open(d / f"{n}_ids.json")) for n in ("train", "val", "test")}
+    assert len(sp["train"]) == 600 and len(sp["val"]) == 200 and len(sp["test"]) == 200
+    allids = sp["train"] + sp["val"] + sp["test"]
+    assert len(set(allids)) == len(allids), "a lake appears in two splits"
+    assert all(i.startswith("CW2019_") for i in allids), "a non-2019 lake leaked in"

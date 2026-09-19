@@ -1,0 +1,30 @@
+{
+  "mode": "combined",
+  "labels_csv": [
+    "/Users/jrines/stanford_gp/research/lakes/2026/essd/labels/labels_CW_2019.csv"
+  ],
+  "test_labels_csv": null,
+  "seed": 42,
+  "train_ratio": 0.6,
+  "val_ratio": 0.2,
+  "test_ratio": 0.2,
+  "train_size": 600,
+  "val_size": 200,
+  "test_size": 200,
+  "train_val_pool_size": 1000,
+  "parent_distribution_trainval": {
+    "ND": 137,
+    "HF": 184,
+    "MD": 163,
+    "LD": 327,
+    "CD": 189
+  },
+  "class_map": {
+    "ND": 0,
+    "HF": 1,
+    "MD": 2,
+    "LD": 3,
+    "CD": 4
+  },
+  "train_ids_are_nested_stratified": true
+}
