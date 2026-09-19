@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256GB
 #SBATCH -C GPU_SKU:A100_SXM4
-#SBATCH --array=0-1
+#SBATCH --array=0-3
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jrines@stanford.edu
 
@@ -24,8 +24,17 @@
 # generalisation result belong to the JSTARS follow-on
 # (docs/eleven_runs/ELEVEN_RUNS.html), not here.
 #
-#   task 0  y2019_base    hygiene + augmentation, p_water in
-#   task 1  y2019_noarea  the same, p_water dropped (reviewer request R3-G1)
+#   task 0  y2019_base_s42    hygiene + augmentation, p_water in
+#   task 1  y2019_noarea_s42  the same, p_water dropped (reviewer request R3-G1)
+#   task 2  y2019_base_s43    seed replicate
+#   task 3  y2019_noarea_s43  seed replicate
+#
+# TWO SEEDS PER ARM. R3-G1 asks whether p_water contributes, and a single run
+# against a single run cannot answer that: if the arms land within the 0.03-0.05
+# tie band the matrix uses, an n=1 difference is not reportable. The replicates
+# cost no extra wall-clock (separate array tasks, separate nodes) and turn
+# "decide when we see the numbers" into a result. The split files are fixed, so
+# --seed varies only weight init, shuffling and the augmentation draw.
 #
 # TRAINED ON THE DEPOSIT, not the internal composites. The stacks_v2 deposit is
 # what a reader gets from DOI 10.25740/sf350xp4038, so a baseline trained on it
@@ -53,8 +62,12 @@
 #     instead of the adaptive-max-pool upsample to 64x64 that Appendix B
 #     documents. 4x cheaper; every run in the matrix used 32x32.
 #   - the deposit rather than the composites (above).
-# Unchanged: 4-layer FrontCNN base 8, CLSTM hidden 32, last-step readout, hard
-# labels, batch 8, Adam 1e-4, wd 1e-5, 400 epochs, seed 42, bf16 AMP; test
+# NOTE the third item is an architecture change, not just hygiene: it alters the
+# feature-map resolution entering the recurrent layer by 4x. Appendix B of the
+# manuscript currently documents the 64x64 upsample and MUST be rewritten to
+# match. Do not describe this baseline as architecturally unchanged.
+# Otherwise unchanged: 4-layer FrontCNN base 8, CLSTM hidden 32, last-step
+# readout, hard labels, batch 8, Adam 1e-4, wd 1e-5, 400 epochs, bf16 AMP; test
 # scored on the best-val-macro-F1 checkpoint.
 #
 #   Band statistics first (deposit, 2019-only train split), then this:
@@ -68,8 +81,10 @@
 # =============================================================================
 set -euo pipefail
 
-RUNS=(y2019_base y2019_noarea crossyear_base crossyear_noarea combined_base combined_noarea)
+RUNS=(y2019_base_s42 y2019_noarea_s42 y2019_base_s43 y2019_noarea_s43
+      crossyear_base_s42 crossyear_noarea_s42 combined_base_s42 combined_noarea_s42)
 RUN="${RUNS[$SLURM_ARRAY_TASK_ID]}"
+SEED="${RUN##*_s}"
 EPOCHS="${EPOCHS:-400}"
 NUM_WORKERS="${NUM_WORKERS:-12}"
 MEM_BUDGET="${MEM_BUDGET:-166}"
@@ -86,8 +101,8 @@ case "$RUN" in
   combined_*)  SPLIT="essd_CW";           STATS="$SHERLOCK_DIR/band_stats/band_stats_essd_combined_deposit.json" ;;
 esac
 case "$RUN" in
-  *_noarea)  ABLATION="--no_areaseq" ;;
-  *)         ABLATION="" ;;
+  *_noarea_*)  ABLATION="--no_areaseq" ;;
+  *)           ABLATION="" ;;
 esac
 
 SPLITS_DIR="$REPO_DIR/splits/$SPLIT"
@@ -123,7 +138,7 @@ echo "Commit:      $GIT_SHA"
 echo "Split:       $SPLITS_DIR"
 echo "Imagery:     $STACKS_ROOT  (stacks_v2 deposit, as published to the SDR)"
 echo "Band stats:  $STATS"
-echo "Ablation:    ${ABLATION:-none}   Eval-only: $EVAL_ONLY"
+echo "Ablation:    ${ABLATION:-none}   Seed: $SEED   Eval-only: $EVAL_ONLY"
 echo "Model save:  $SAVE_PATH"
 echo "=============================================="
 
@@ -162,6 +177,7 @@ python3 -u "$REPO_DIR/engine/training/run_training.py" \
     --no_mask --mask_source static \
     --band_stats "$STATS" --fill mean --validity_channel \
     --augment --augment_mode random \
+    --seed "$SEED" \
     --test_checkpoint f1 \
     --host_mem_budget_gb "$MEM_BUDGET" --num_workers "$NUM_WORKERS" \
     --wandb_name "essd_rev_${RUN}" \
