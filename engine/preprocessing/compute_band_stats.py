@@ -38,6 +38,10 @@ def band_names(nc):
     if 'band_name' in nc.variables:
         raw = [''.join(_decode(c) for c in np.atleast_1d(row)).strip('\x00').strip()
                for row in nc.variables['band_name'][:]]
+    elif 'channel' in nc.variables:
+        # ESSD composites name their channels here: red green blue nir swir16
+        # cloudmask_scl mask. Deposits (stacks_v2) use band_name instead.
+        raw = [_decode(b).strip('\x00').strip() for b in np.atleast_1d(nc.variables['channel'][:])]
     else:
         raw = [_decode(b) for b in nc.variables['band'][:]]
     return [BAND_TO_CHANNEL.get(b, b) for b in raw]
@@ -69,6 +73,8 @@ def main():
             nc.set_auto_mask(False)
             names = band_names(nc)
             var = nc.variables['reflectance'] if 'reflectance' in nc.variables else nc.variables['imagery']
+            # Composites carry non-spectral trailing channels (cloudmask_scl,
+            # mask); only the real bands get statistics.
             arr = np.asarray(var[::args.tstride, :, ::args.stride, ::args.stride], dtype=np.float64)
         for b, name in enumerate(names):
             if name == 'mask':
