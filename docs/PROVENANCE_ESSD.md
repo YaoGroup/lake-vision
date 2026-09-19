@@ -63,9 +63,36 @@ argparse — see the header comment there.
 
 ### Cross-year baseline — `run_training_essd_crossyear.sh`
 
-Best val F1 **0.6203**, test F1 **0.4454**. Per-class test F1: ND 0.459, HF 0.471,
-MD 0.059, LD 0.536, CD 0.703. Completed before 2026-04-23; the script reached its
-final form in the `74151af`..`cf2a399` range (2026-04-17 to 04-19).
+Val macro-F1 **0.6075**, test macro-F1 **0.4488**. Per-class test F1: ND 0.484,
+HF 0.440, MD 0.105, LD 0.501, CD 0.714. Completed before 2026-04-23; the script
+reached its final form in the `74151af`..`cf2a399` range (2026-04-17 to 04-19).
+
+Scored from the prediction tables that produced the paper's figures, with
+`sklearn.metrics.f1_score(..., average='macro')` over the five class labels:
+
+```
+essd/inference/{val,test}_predictions_bestf1.csv
+essd/inference/inference_essd/crossyear/{val,test}_predictions_bestf1.csv
+```
+
+Both copies agree. **Corrected 2026-09-18.** This section previously recorded val
+0.6203 / test 0.4454 with per-class ND 0.459, HF 0.471, MD 0.059, LD 0.536,
+CD 0.703. No saved inference pass anywhere in the repository reproduces those
+figures, and they disagree with the manuscript: Table B1 reports val 0.61
+(0.6075 rounds there, 0.6203 would round to 0.62), and §6 quotes the MD collapse
+as "0.41 → 0.11", which is exactly val 0.410 → test 0.105 — the old 0.059 would
+have been written 0.06. The superseded numbers were most likely training-log
+peaks rather than the inference pass, which fits the learning-curve table below
+matching the `metrics_N*.json` peaks exactly. The manuscript was always right;
+this record was wrong.
+
+### Combined baseline — `run_training_essd_combined.sh`
+
+Val macro-F1 **0.5875**, test macro-F1 **0.4898**. Per-class test F1: ND 0.615,
+HF 0.317, MD 0.339, LD 0.341, CD 0.836. Scored the same way, from
+`essd/inference/inference_essd/combined/{val,test}_predictions_bestf1.csv`
+(336 val, 168 test). Recorded 2026-09-18; this section did not exist before, so
+these figures supersede nothing.
 
 ### Learning curve — `run_training_essd_learning_curve.sh`
 

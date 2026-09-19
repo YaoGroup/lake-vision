@@ -29,6 +29,23 @@
 #   task 2  y2019_base_s43    seed replicate
 #   task 3  y2019_noarea_s43  seed replicate
 #
+# R3-G1's conditional follow-up -- if p_water contributes, test the NDWI water
+# mask as an input in its place -- is DEFERRED, and the response letter has to
+# say so with the reason. They are not the same quantity. The NDWI formula is
+# shared (Dunmire et al. 2025, Eq. 1: (Blue - Red)/(Blue + Red)), and that is
+# the only thing that carries over:
+#
+#                Dunmire p_water              deposit water_mask_ndwi
+#   threshold    NDWI > 0.18                  NDWI > 0.3
+#   radiometry   top-of-atmosphere            bottom-of-atmosphere (L2A)
+#   footprint    inside the lake outline      the whole 512x512 tile
+#   cloud mask   Moussavi SWIR/Cirrus         Sen2Cor SCL classes 3/8/9/10
+#
+#   Dunmire et al. (2025), Earth and Space Science, 10.1029/2024EA003793, p. 3.
+# A like-for-like swap needs threshold, radiometry and footprint reconciled
+# first; substituting one for the other as-is would produce a misleading
+# ablation. This belongs to JSTARS, where the dynamic mask is already a variable.
+#
 # TWO SEEDS PER ARM. R3-G1 asks whether p_water contributes, and a single run
 # against a single run cannot answer that: if the arms land within the 0.03-0.05
 # tie band the matrix uses, an n=1 difference is not reportable. The replicates
