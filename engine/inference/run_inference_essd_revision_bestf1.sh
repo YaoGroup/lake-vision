@@ -9,7 +9,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96GB
-#SBATCH -C GPU_SKU:A100_SXM4
+# any serc GPU is plenty for inference (~0.85 s/lake on an A100); no SKU constraint,
+# so the job can land on whatever is free.
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jrines@stanford.edu
 
